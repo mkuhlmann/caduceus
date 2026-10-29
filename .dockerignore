@@ -1,0 +1,12 @@
+node_modules
+dist
+dist-bin
+desktop
+.data
+.env
+.env.*
+.git
+.github
+*.log
+Dockerfile
+.dockerignore

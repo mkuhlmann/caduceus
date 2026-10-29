@@ -1,0 +1,43 @@
+{
+	"name": "caduceus",
+	"version": "0.1.0",
+	"private": true,
+	"type": "module",
+	"scripts": {
+		"dev": "bun run --parallel dev:server dev:web",
+		"dev:web": "vite",
+		"dev:server": "bun --watch server/index.ts",
+		"build": "vue-tsc --noEmit && vite build",
+		"build:server": "bun build server/index.ts --compile --outfile dist-bin/caduceus-server",
+		"start": "NODE_ENV=production bun server/index.ts",
+		"typecheck": "vue-tsc --noEmit && tsc -p server --noEmit",
+		"desktop": "bun run build && cd desktop/electron && bun install && bun run start",
+		"desktop:dist": "bun run build && bun run build:server:linux-x64 && cd desktop/electron && bun install && bun run dist",
+		"build:server:win-x64": "bun build server/index.ts --compile --target=bun-windows-x64 --outfile dist-bin/win-x64/caduceus-server.exe",
+		"build:server:linux-x64": "bun build server/index.ts --compile --target=bun-linux-x64 --outfile dist-bin/linux-x64/caduceus-server",
+		"desktop:win": "bun run build && bun run build:server:win-x64 && cd desktop/electron && bun install && bun run dist:win"
+	},
+	"dependencies": {
+		"@elysiajs/static": "^1.4.10",
+		"@fontsource-variable/geologica": "^5.3.0",
+		"@fontsource-variable/jetbrains-mono": "^5.3.0",
+		"dompurify": "^3.4.17",
+		"elysia": "^1.4.30",
+		"highlight.js": "^11.12.0",
+		"lucide-vue-next": "^1.0.0",
+		"marked": "^18.1.2",
+		"pinia": "^4.1.0",
+		"vue": "^3.5.44",
+		"vue-router": "^5.4.0"
+	},
+	"devDependencies": {
+		"@tailwindcss/vite": "^4.3.3",
+		"@types/bun": "^1.4.4",
+		"@types/dompurify": "^3.0.5",
+		"@vitejs/plugin-vue": "^6.0.10",
+		"tailwindcss": "^4.3.3",
+		"typescript": "~5.9",
+		"vite": "^8.3.5",
+		"vue-tsc": "^3.3.13"
+	}
+}

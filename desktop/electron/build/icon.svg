@@ -1,0 +1,21 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+	<defs>
+		<linearGradient id="caduceus-lapis" x1="0" y1="0" x2="0" y2="1">
+			<stop offset="0" stop-color="#1f2869" />
+			<stop offset="1" stop-color="#141836" />
+		</linearGradient>
+		<mask id="caduceus-weave" maskUnits="userSpaceOnUse" x="0" y="0" width="512" height="512">
+			<rect width="512" height="512" fill="#fff" />
+			<path d="M301.8 280.8C289.9 289.6 272.6 298.4 256 307.2C239.4 316 223.8 324.8 214.2 333.6" fill="none" stroke="#000" stroke-width="51.2" />
+		</mask>
+	</defs>
+	<rect width="512" height="512" rx="112" fill="url(#caduceus-lapis)" />
+	<g fill="none" stroke-linecap="round" stroke-width="28.8">
+		<path d="M256 92.8V211.2M256 403.2V432" stroke="#e3b54d" />
+		<path d="M256 211.2C220.8 227.2 192 243.2 193.6 259.2C195.2 275.2 225.8 291.2 256 307.2C286.2 323.2 310.4 339.2 308.8 355.2C307.2 371.2 281.1 387.2 256 403.2" stroke="#e3b54d" mask="url(#caduceus-weave)" />
+		<path d="M256 211.2C291.2 227.2 320 243.2 318.4 259.2C316.8 275.2 286.2 291.2 256 307.2C225.8 323.2 201.6 339.2 203.2 355.2C204.8 371.2 230.9 387.2 256 403.2" stroke="#e3b54d" />
+	</g>
+	<circle cx="256" cy="92.8" r="28.8" fill="#e3b54d" />
+	<path d="M250 224.3C184.5 194.5 102.4 130.2 54.4 102.4C121.6 44.8 201.6 108.8 262 198.1Z" fill="#e3b54d" />
+	<path d="M262 224.3C327.5 194.5 409.6 130.2 457.6 102.4C390.4 44.8 310.4 108.8 250 198.1Z" fill="#e3b54d" />
+</svg>
