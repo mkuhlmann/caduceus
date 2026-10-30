@@ -36,6 +36,7 @@ const lastError = computed(() => (id.value ? sessions.lastError[id.value] : unde
 const foreign = computed(() => session.value?.source && !['api_server'].includes(session.value.source))
 
 const scroller = ref<HTMLElement>()
+const content = ref<HTMLElement>()
 const composer = ref<InstanceType<typeof Composer>>()
 const drawer = ref(false)
 const model = ref('')
@@ -66,11 +67,21 @@ watch(
 	{ immediate: true },
 )
 
-onUnmounted(() => sessions.follow(undefined))
+onUnmounted(() => {
+	sessions.follow(undefined)
+	grow.disconnect()
+})
 
+// Autoscroll: while the reader is at the bottom, any growth of the conversation (streamed text, tool
+// output, images loading, a run in another tab) keeps it there. Scrolling up stops it; scrolling back
+// to the bottom resumes it.
+let lastTop = 0
 function onScroll() {
 	const el = scroller.value
-	if (el) stickToBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 120
+	if (!el) return
+	if (el.scrollHeight - el.scrollTop - el.clientHeight < 40) stickToBottom = true
+	else if (el.scrollTop < lastTop) stickToBottom = false
+	lastTop = el.scrollTop
 }
 function scrollDown(force = false) {
 	nextTick(() => {
@@ -78,15 +89,12 @@ function scrollDown(force = false) {
 		if (el && (force || stickToBottom)) el.scrollTop = el.scrollHeight
 	})
 }
-watch(
-	() => {
-		const t = live.value?.turn
-		return t
-			? t.steps.length + (t.steps.at(-1) as any)?.text?.length
-			: (id.value ? sessions.messages[id.value]?.length : 0) + (remote.value?.approval ? 1 : 0)
-	},
-	() => scrollDown(),
-)
+const grow = new ResizeObserver(() => scrollDown())
+onMounted(() => scroller.value && grow.observe(scroller.value))
+watch(content, (el, old) => {
+	if (old) grow.unobserve(old)
+	if (el) grow.observe(el)
+})
 
 async function send(text: string, images: string[]) {
 	let target = id.value
@@ -169,7 +177,7 @@ const greeting = computed(() => (project.value ? `New chat in ${project.value.na
 						}}
 					</p>
 				</div>
-				<div v-else class="mx-auto max-w-4xl px-4 py-6 md:px-8">
+				<div v-else ref="content" class="mx-auto max-w-4xl px-4 py-6 md:px-8">
 					<p v-if="sessions.loadingMessages && !turns.length" class="text-sm text-ink-3">Loading conversation</p>
 					<p v-else-if="!turns.length" class="text-sm text-ink-3">No messages yet.</p>
 					<template v-for="t in turns" :key="t.key">
