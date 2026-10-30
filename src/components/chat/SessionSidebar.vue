@@ -72,7 +72,7 @@ function newChat() {
 						>
 							<span class="flex items-center gap-1.5 pr-6 text-sm text-ink">
 								<span
-									v-if="sessions.live[s.id]"
+									v-if="sessions.live[s.id] || sessions.activeRuns[s.id]"
 									class="size-1.5 shrink-0 animate-pulse rounded-full bg-gold"
 									title="Working"
 								/>

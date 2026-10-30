@@ -147,16 +147,22 @@ Run the compiled binary with `CADUCEUS_DIST` pointing at `dist/`.
 
 ## Desktop
 
-`desktop/electron` is a thin Electron shell. It starts the relay binary as a sidecar on a free localhost port and opens a window on it. `bun run desktop` runs it from source, and `bun run desktop:dist` packages it with electron-builder for Linux.
+`desktop/webview` builds the desktop app as one executable: the relay, the built UI and a native window from [webview-bun](https://github.com/tr1ckydev/webview-bun). It does not bundle a browser; the window is the system webview (WebView2 on Windows, WebKitGTK on Linux). The relay runs in a worker on a localhost port that stays the same between launches.
 
-`bun run desktop:win` builds a portable Windows x64 zip, `desktop/electron/dist/Caduceus-<version>-x64-portable.zip`, and works from Linux without Wine. Unzip it anywhere, including a USB stick, and run `Caduceus.exe`. While the file named `portable` sits next to the exe, everything the app stores goes into a `data` folder beside it. Delete that file to use `%APPDATA%\Caduceus` instead.
+- `bun run desktop` runs it from source.
+- `bun run desktop:win` builds `desktop/webview/out/Caduceus-<version>-x64-portable.zip` (about 55 MB). Unzip it anywhere, including a USB stick, and run `Caduceus.exe`. While the file named `portable` sits next to the exe, the connection and projects go into a `data` folder beside it. Delete that file to use `%APPDATA%\Caduceus` instead. Windows 10 needs the [WebView2 runtime](https://developer.microsoft.com/microsoft-edge/webview2/); Windows 11 ships it.
+- `bun run desktop:linux` builds `desktop/webview/out/caduceus-<version>-linux-x64.tar.gz` (about 52 MB). It needs GTK 4 and WebKitGTK 6.0 on the system: `sudo apt install libgtk-4-1 libwebkitgtk-6.0-4`.
 
-The UI uses hash routing and relative URLs, and has no Electron-specific code. Any other webview wrapper (Tauri, Electrobun, Neutralino) can host it the same way: start `caduceus-server` on `127.0.0.1`, then point the webview at it.
+Both targets build from Linux. Set `CADUCEUS_DEVTOOLS=1` to get the webview's developer tools.
+
+`desktop/electron` is the earlier Electron shell, kept for comparison (`bun run electron`, `bun run electron:win`). It ships Chromium and a separate relay binary, about 180 MB zipped.
+
+The UI uses hash routing and relative URLs, and has no shell-specific code. Any other webview wrapper can host it the same way: start `caduceus-server` on `127.0.0.1`, then point the webview at it.
 
 ## Project layout
 
 ```
 src/        Vue 3 frontend (Pinia, vue-router, Tailwind v4)
 server/     Elysia relay: static files, auth, proxy to Hermes, project store
-desktop/    Electron shell
+desktop/    Desktop app (webview), earlier Electron shell
 ```

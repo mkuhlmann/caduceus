@@ -145,6 +145,10 @@ const waiting = computed(() => props.turn.live && props.turn.steps.length === 0)
 </template>
 
 <style scoped>
+/* Replies run a little wider than general reading text: they carry code, tables and command output. */
+.agent-turn .prose-h {
+	max-width: 88ch;
+}
 /* The route: a thread down the left edge that the agent walks. Gold while it is moving. */
 .route-thread {
 	position: relative;

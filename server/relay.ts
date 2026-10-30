@@ -1,4 +1,5 @@
 import { getConnection, onConnectionChange, type Connection } from './config'
+import { isChatStream } from './runs'
 
 /**
  * Same-origin relay to the two public Hermes HTTP surfaces. It exists for three reasons:
@@ -151,7 +152,7 @@ export async function relay(target: 'gw' | 'dash', path: string, req: Request): 
 			headers,
 			body: hasBody ? await req.clone().arrayBuffer() : undefined,
 			redirect: 'manual',
-			signal: req.signal,
+			signal: target === 'gw' && isChatStream(path) ? undefined : req.signal,
 		})
 	}
 

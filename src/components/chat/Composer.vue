@@ -1,9 +1,20 @@
+<script lang="ts">
+// In-memory drafts per chat, so switching chats doesn't carry over typed text or images.
+const drafts = new Map<string, { text: string; images: string[] }>()
+</script>
+
 <script setup lang="ts">
 import { nextTick, ref, watch } from 'vue'
 import { ArrowUp, Square, ImagePlus, X } from 'lucide-vue-next'
 import { useToasts } from '@/stores/toast'
 
-const props = defineProps<{ running?: boolean; disabled?: boolean; placeholder?: string; autofocus?: boolean }>()
+const props = defineProps<{
+	running?: boolean
+	disabled?: boolean
+	placeholder?: string
+	autofocus?: boolean
+	draftKey?: string
+}>()
 const emit = defineEmits<{ send: [text: string, images: string[]]; stop: [] }>()
 const toasts = useToasts()
 const text = ref('')
@@ -22,12 +33,26 @@ function grow() {
 }
 watch(text, () => nextTick(grow))
 
+watch(
+	() => props.draftKey,
+	(key, old) => {
+		if (old !== undefined) {
+			if (text.value || images.value.length) drafts.set(old, { text: text.value, images: [...images.value] })
+			else drafts.delete(old)
+		}
+		const d = key !== undefined ? drafts.get(key) : undefined
+		text.value = d?.text ?? ''
+		images.value = d ? [...d.images] : []
+	},
+)
+
 function submit() {
 	const t = text.value.trim()
 	if ((!t && !images.value.length) || props.disabled) return
 	emit('send', t, images.value)
 	text.value = ''
 	images.value = []
+	if (props.draftKey !== undefined) drafts.delete(props.draftKey)
 }
 
 function onKey(e: KeyboardEvent) {

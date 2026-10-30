@@ -5,6 +5,8 @@ import { getConnection, saveConnection, publicConnection, envLocked } from './co
 import { relay } from './relay'
 import { authGuard, authRoutes } from './auth'
 import { projectRoutes } from './projects'
+import { runRoutes, trackChatStream } from './runs'
+import { embedded } from './embedded'
 
 const port = Number(process.env.PORT ?? 7811)
 const host = process.env.HOST ?? '127.0.0.1'
@@ -24,6 +26,7 @@ const app = new Elysia()
 	.use(authRoutes)
 	.onBeforeHandle({ as: 'global' }, authGuard)
 	.use(projectRoutes)
+	.use(runRoutes)
 	.get('/ui-api/connection', () => publicConnection())
 	.put('/ui-api/connection', async ({ body, set }) => {
 		if (envLocked) {
@@ -52,21 +55,30 @@ const app = new Elysia()
 
 // Method-specific routes: Elysia ranks `.get('/*')` (static files) above `.all(...)`.
 for (const method of ['GET', 'POST', 'PUT', 'PATCH', 'DELETE']) {
-	app.route(method, '/ui-api/gw/*', ({ request, params }) => relay('gw', '/' + params['*'], request))
+	app.route(method, '/ui-api/gw/*', async ({ request, params }) =>
+		trackChatStream('/' + params['*'], await relay('gw', '/' + params['*'], request)),
+	)
 	app.route(method, '/ui-api/dash/*', ({ request, params }) => relay('dash', '/' + params['*'], request))
 }
 app.get('/*', ({ params }) => serveStatic(params['*']))
 
 function serveStatic(path: string) {
-	if (!existsSync(distDir)) return new Response('Frontend not built. Run `bun run build`.', { status: 404 })
-	const safe = resolve(distDir, '.' + '/' + decodeURIComponent(path || ''))
-	if (safe.startsWith(distDir) && path && existsSync(safe) && Bun.file(safe).size > 0) {
+	if (!embedded.size && !existsSync(distDir))
+		return new Response('Frontend not built. Run `bun run build`.', { status: 404 })
+	const file = embedded.size ? embedded.get(path) : diskFile(path)
+	if (file) {
 		const immutable = path.startsWith('assets/')
-		return new Response(Bun.file(safe), {
+		return new Response(Bun.file(file), {
 			headers: immutable ? { 'Cache-Control': 'public, max-age=31536000, immutable' } : {},
 		})
 	}
-	return new Response(Bun.file(join(distDir, 'index.html')), { headers: { 'Cache-Control': 'no-cache' } })
+	const index = embedded.get('index.html') ?? join(distDir, 'index.html')
+	return new Response(Bun.file(index), { headers: { 'Cache-Control': 'no-cache' } })
+}
+
+function diskFile(path: string) {
+	const safe = resolve(distDir, '.' + '/' + decodeURIComponent(path || ''))
+	if (safe.startsWith(distDir) && path && existsSync(safe) && Bun.file(safe).size > 0) return safe
 }
 
 app.listen({ port, hostname: host, idleTimeout: 0, reusePort: false })

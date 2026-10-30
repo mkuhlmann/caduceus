@@ -1,6 +1,6 @@
 import { defineStore } from 'pinia'
 import { computed, reactive, ref, shallowRef } from 'vue'
-import { gateway, type ApprovalRequest, type Message, type Session } from '@/lib/gateway'
+import { gateway, pendingApproval, type ApprovalRequest, type Message, type Session } from '@/lib/gateway'
 import { buildTurns, type AgentTurn, type ApprovalStep, type ToolStep, type Turn } from '@/lib/turns'
 import { useToasts } from './toast'
 import { useProjects } from './projects'
@@ -12,6 +12,36 @@ type Live = {
 	abort: AbortController
 	approval?: ApprovalRequest
 	status?: string
+	stopRequested?: boolean
+}
+
+/** A run of the open session that this tab did not start: another tab, device or channel. */
+type Remote = { runId?: string; approval?: ApprovalRequest }
+
+const FOLLOW_MS = 2000
+const IDLE_MS = 6000
+// A transcript that stopped mid-turn longer ago than this is an interrupted run, not a live one.
+const STALE_S = 10 * 60
+const RUNS_MS = 4000
+// Hermes titles a chat instantly from the first message, then upgrades it with a model in the background,
+// often after the run has ended. Look again a few times so the better title shows up.
+const TITLE_CHECKS_MS = [4000, 12000, 30000]
+
+function lastOf<T>(xs: T[], ok: (x: T) => unknown) {
+	for (let i = xs.length - 1; i >= 0; i--) if (ok(xs[i]!)) return xs[i]
+}
+
+function unfinished(ms: Message[]) {
+	const last = lastOf(ms, (m) => m.role !== 'system' && m.display_kind !== 'hidden')
+	if (!last) return false
+	return last.role === 'user' || last.role === 'tool' || (last.role === 'assistant' && !!last.tool_calls?.length)
+}
+
+function sameTranscript(a: Message[] | undefined, b: Message[]) {
+	if (!a || a.length !== b.length) return false
+	const x = a.at(-1)
+	const y = b.at(-1)
+	return x?.id === y?.id && JSON.stringify(x?.content) === JSON.stringify(y?.content)
 }
 
 export const SOURCE_LABELS: Record<string, string> = {
@@ -54,6 +84,8 @@ export const useSessions = defineStore('sessions', () => {
 	const loadingMessages = ref(false)
 	const live = reactive<Record<string, Live>>({})
 	const lastError = shallowRef<Record<string, string>>({})
+	const remote = reactive<Record<string, Remote>>({})
+	const activeRuns = ref<Record<string, string>>({})
 
 	async function loadList(more = false) {
 		loadingList.value = true
@@ -106,6 +138,21 @@ export const useSessions = defineStore('sessions', () => {
 		if (l) {
 			turns.push({ kind: 'user', key: 'live-user', text: l.user.text, images: l.user.images })
 			turns.push(l.turn)
+			return turns
+		}
+		const r = remote[id]
+		if (r) {
+			let turn = turns.at(-1)
+			if (turn?.kind !== 'agent') {
+				turn = { kind: 'agent', key: 'remote-agent', steps: [], reasoning: '' }
+				turns.push(turn)
+			}
+			turn.live = true
+			const a = r.approval
+			if (a) {
+				const choices = a.choices ?? ['once', 'session', 'always', 'deny']
+				turn.steps.push({ kind: 'approval', command: a.command, description: a.description, choices })
+			}
 		}
 		return turns
 	}
@@ -119,9 +166,9 @@ export const useSessions = defineStore('sessions', () => {
 	}
 
 	async function send(id: string, text: string, images: string[] = []) {
-		if (live[id]) {
+		if (live[id] || remote[id]?.runId) {
 			// A message sent mid-run steers the agent instead of queueing a new turn.
-			const runId = live[id].runId
+			const runId = live[id] ? live[id].runId : remote[id]!.runId
 			if (runId) {
 				await gateway.steer(runId, text).then(
 					() => toasts.push('Sent to the running agent'),
@@ -137,13 +184,15 @@ export const useSessions = defineStore('sessions', () => {
 		const turn = reactive<AgentTurn>({ kind: 'agent', key: 'live-agent', steps: [], reasoning: '', live: true })
 		const l: Live = reactive({ turn, user: { text, images }, abort: new AbortController() }) as Live
 		live[id] = l
-		const firstMessage = (messages[id] ?? []).length === 0
 
 		try {
 			for await (const ev of gateway.chat(id, payload, { signal: l.abort.signal })) {
 				switch (ev.type) {
 					case 'run.started':
 						l.runId = ev.run_id
+						if (l.stopRequested) gateway.stopRun(ev.run_id).catch(() => l.abort.abort())
+						// Hermes names the chat from the message as the run starts.
+						setTimeout(() => refreshSession(id, true), 1500)
 						break
 					case 'assistant.delta': {
 						const last = turn.steps.at(-1)
@@ -212,34 +261,57 @@ export const useSessions = defineStore('sessions', () => {
 				const { [id]: _, ...rest } = lastError.value
 				lastError.value = rest
 			}
-			await refreshSession(id, firstMessage ? text : undefined)
+			await settle(id)
 		}
 	}
 
-	async function refreshSession(id: string, firstText?: string) {
-		let s = await gateway.session(id).catch(() => null)
-		if (s && !s.title && firstText) {
-			const title = firstText.replace(/\s+/g, ' ').trim().slice(0, 60)
-			if (title) {
-				await gateway.updateSession(id, { title }).catch(() => {})
-				s = { ...s, title }
-			}
-		}
+	/** Fetch a session again; moved to the top unless `inPlace`. */
+	async function refreshSession(id: string, inPlace = false) {
+		const s = await gateway.session(id).catch(() => null)
 		if (!s) return
 		const i = list.value.findIndex((x) => x.id === id)
-		if (i >= 0) list.value.splice(i, 1)
-		list.value.unshift(s)
+		if (inPlace && i >= 0) list.value.splice(i, 1, s)
+		else {
+			if (i >= 0) list.value.splice(i, 1)
+			list.value.unshift(s)
+		}
+	}
+
+	/** A run of this session just ended: show its final state now and its upgraded title once Hermes has it. */
+	async function settle(id: string) {
+		await refreshSession(id)
+		for (const ms of TITLE_CHECKS_MS) setTimeout(() => !live[id] && refreshSession(id, true), ms)
 	}
 
 	async function stop(id: string) {
 		const l = live[id]
+		const remoteRun = remote[id]?.runId
+		if (!l && remoteRun) {
+			await gateway.stopRun(remoteRun).catch((e) => toasts.error(`Could not stop the run: ${(e as Error).message}`))
+			return
+		}
 		if (!l) return
-		if (l.runId) await gateway.stopRun(l.runId).catch(() => l.abort.abort())
-		else l.abort.abort()
+		if (l.runId) {
+			await gateway.stopRun(l.runId).catch(() => l.abort.abort())
+			return
+		}
+		// The relay keeps the run going without this tab, so stop it once its id arrives.
+		l.stopRequested = true
+		setTimeout(() => !l.runId && l.abort.abort(), 5000)
 	}
 
 	async function answerApproval(id: string, choice: string) {
 		const l = live[id]
+		const r = remote[id]
+		if (!l && r?.approval) {
+			try {
+				await gateway.approve(r.approval, choice)
+				r.approval = undefined
+			} catch (e) {
+				toasts.error(`Could not send the decision: ${(e as Error).message}`)
+			}
+			return
+		}
 		if (!l?.approval) return
 		try {
 			await gateway.approve(l.approval, choice)
@@ -250,6 +322,89 @@ export const useSessions = defineStore('sessions', () => {
 			toasts.error(`Could not send the decision: ${(e as Error).message}`)
 		}
 	}
+
+	/**
+	 * Keep the open session current while it runs somewhere this tab is not streaming: another tab or
+	 * device (the relay knows its run id, so approvals, stop and steering work here too) or another
+	 * channel such as the terminal (Hermes saves each step, so the transcript fills in as it goes).
+	 */
+	let followed: string | undefined
+	let followTimer: ReturnType<typeof setTimeout> | undefined
+
+	function follow(id?: string) {
+		clearTimeout(followTimer)
+		if (followed && followed !== id) delete remote[followed]
+		followed = id
+		if (id) followTimer = setTimeout(() => poll(id), 0)
+	}
+
+	async function poll(id: string) {
+		let next = IDLE_MS
+		try {
+			if (followed !== id || document.hidden || live[id]) return
+			await syncRuns()
+			const runId = activeRuns.value[id]
+			const stale = !runId && !unfinished(messages[id] ?? [])
+			if (stale && !remote[id]) return
+			const [status, ms] = await Promise.all([
+				runId ? gateway.run(runId).catch(() => null) : null,
+				gateway.messages(id).catch(() => null),
+			])
+			if (followed !== id || live[id] || !ms) return
+			if (!sameTranscript(messages[id], ms)) messages[id] = ms
+			const lastAt = Number(lastOf(ms, (m) => m.timestamp)?.timestamp ?? 0)
+			const running = runId
+				? !['completed', 'failed', 'cancelled'].includes(status?.status ?? 'running')
+				: unfinished(ms) && Date.now() / 1000 - lastAt < STALE_S
+			if (running) {
+				remote[id] = { runId, approval: pendingApproval(status) }
+				next = FOLLOW_MS
+			} else if (remote[id]) {
+				delete remote[id]
+				await settle(id)
+			}
+		} finally {
+			if (followed === id) followTimer = setTimeout(() => poll(id), next)
+		}
+	}
+
+	/**
+	 * Which sessions are running anywhere through this server, for the sidebar. Survives a reload: the
+	 * relay keeps the runs going and tracks them, this tab only asks.
+	 */
+	async function syncRuns() {
+		const next = await gateway.activeRuns().catch(() => null)
+		if (!next) return
+		const prev = activeRuns.value
+		activeRuns.value = next
+		for (const id of Object.keys(prev)) if (!next[id] && !live[id] && id !== followed) void settle(id)
+		for (const id of Object.keys(next)) if (!prev[id] && !byId(id)) void refreshSession(id)
+	}
+
+	let runsTimer: ReturnType<typeof setTimeout> | undefined
+	async function watchRuns() {
+		clearTimeout(runsTimer)
+		try {
+			if (!document.hidden) await syncRuns()
+		} finally {
+			runsTimer = setTimeout(watchRuns, RUNS_MS)
+		}
+	}
+	void watchRuns()
+
+	document.addEventListener('visibilitychange', () => {
+		if (!document.hidden) void watchRuns()
+		if (document.hidden || !followed || live[followed]) return
+		clearTimeout(followTimer)
+		const id = followed
+		gateway
+			.messages(id)
+			.then((ms) => {
+				if (followed === id && !live[id] && !sameTranscript(messages[id], ms)) messages[id] = ms
+			})
+			.catch(() => {})
+			.finally(() => poll(id))
+	})
 
 	async function rename(id: string, title: string) {
 		await gateway.updateSession(id, { title })
@@ -294,6 +449,9 @@ export const useSessions = defineStore('sessions', () => {
 		loadingMessages,
 		live,
 		lastError,
+		remote,
+		activeRuns,
+		follow,
 		loadList,
 		loadMessages,
 		turnsFor,

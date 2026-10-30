@@ -6,3 +6,5 @@ desktop/electron/out
 *.log
 .env
 .env.*
+desktop/webview/out
+desktop/webview/assets.gen.ts

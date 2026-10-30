@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, nextTick, onMounted, ref, watch } from 'vue'
+import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { PanelLeft, GitFork } from 'lucide-vue-next'
 import { useSessions, sourceLabel } from '@/stores/sessions'
@@ -26,6 +26,12 @@ const project = computed(() =>
 )
 const turns = computed(() => (id.value ? sessions.turnsFor(id.value) : []))
 const live = computed(() => (id.value ? sessions.live[id.value] : undefined))
+const remote = computed(() => (id.value && !live.value ? sessions.remote[id.value] : undefined))
+// A run in another tab or device can be stopped and steered from here; one in another channel only watched.
+const running = computed(() => !!live.value || !!remote.value?.runId)
+const liveStatus = computed(
+	() => live.value?.status ?? (remote.value && !remote.value.runId ? 'Working in another channel' : undefined),
+)
 const lastError = computed(() => (id.value ? sessions.lastError[id.value] : undefined))
 const foreign = computed(() => session.value?.source && !['api_server'].includes(session.value.source))
 
@@ -50,13 +56,17 @@ watch(
 	id,
 	async (v) => {
 		drawer.value = false
+		sessions.follow(undefined)
 		if (v && !sessions.live[v]) await sessions.loadMessages(v)
+		if (v === id.value) sessions.follow(v)
 		stickToBottom = true
 		scrollDown(true)
 		nextTick(() => composer.value?.focus())
 	},
 	{ immediate: true },
 )
+
+onUnmounted(() => sessions.follow(undefined))
 
 function onScroll() {
 	const el = scroller.value
@@ -71,7 +81,9 @@ function scrollDown(force = false) {
 watch(
 	() => {
 		const t = live.value?.turn
-		return t ? t.steps.length + (t.steps.at(-1) as any)?.text?.length : turns.value.length
+		return t
+			? t.steps.length + (t.steps.at(-1) as any)?.text?.length
+			: (id.value ? sessions.messages[id.value]?.length : 0) + (remote.value?.approval ? 1 : 0)
 	},
 	() => scrollDown(),
 )
@@ -131,7 +143,9 @@ const greeting = computed(() => (project.value ? `New chat in ${project.value.na
 					<PanelLeft :size="18" />
 				</button>
 				<div class="min-w-0 flex-1">
-					<h1 class="truncate text-base font-semibold">{{ session?.title || (id ? 'Untitled chat' : 'New chat') }}</h1>
+					<h1 class="truncate text-base font-semibold">
+						{{ session?.title || session?.preview?.slice(0, 70) || (id ? 'Untitled chat' : 'New chat') }}
+					</h1>
 					<p class="flex items-center gap-2 truncate text-xs text-ink-3">
 						<span v-if="project" class="inline-flex items-center gap-1">
 							<span class="size-1.5 rounded-full" :style="{ background: PROJECT_COLORS[project.color] }" />{{
@@ -146,7 +160,7 @@ const greeting = computed(() => (project.value ? `New chat in ${project.value.na
 			</header>
 
 			<div ref="scroller" class="min-h-0 flex-1 overflow-y-auto" @scroll="onScroll">
-				<div v-if="!id" class="mx-auto flex h-full max-w-3xl flex-col justify-end px-4 pb-6 md:px-8">
+				<div v-if="!id" class="mx-auto flex h-full max-w-4xl flex-col justify-end px-4 pb-6 md:px-8">
 					<h2 class="display mb-2 text-3xl">{{ greeting }}</h2>
 					<p class="mb-6 max-w-[60ch] text-ink-2">
 						{{
@@ -155,7 +169,7 @@ const greeting = computed(() => (project.value ? `New chat in ${project.value.na
 						}}
 					</p>
 				</div>
-				<div v-else class="mx-auto max-w-3xl px-4 py-6 md:px-8">
+				<div v-else class="mx-auto max-w-4xl px-4 py-6 md:px-8">
 					<p v-if="sessions.loadingMessages && !turns.length" class="text-sm text-ink-3">Loading conversation</p>
 					<p v-else-if="!turns.length" class="text-sm text-ink-3">No messages yet.</p>
 					<template v-for="t in turns" :key="t.key">
@@ -176,7 +190,7 @@ const greeting = computed(() => (project.value ? `New chat in ${project.value.na
 						<AgentTurnView
 							v-else
 							:turn="t"
-							:status="t.live ? live?.status : undefined"
+							:status="t.live ? liveStatus : undefined"
 							@approve="(c) => id && sessions.answerApproval(id, c)"
 						/>
 					</template>
@@ -186,9 +200,9 @@ const greeting = computed(() => (project.value ? `New chat in ${project.value.na
 				</div>
 			</div>
 
-			<div class="mx-auto w-full max-w-3xl px-3 pb-3 md:px-8 md:pb-5">
+			<div class="mx-auto w-full max-w-4xl px-3 pb-3 md:px-8 md:pb-5">
 				<div
-					v-if="foreign && !live"
+					v-if="foreign && !live && !remote"
 					class="mb-2 flex flex-wrap items-center justify-between gap-2 rounded-lg bg-surface-2 px-3 py-2 text-sm text-ink-2"
 				>
 					<span
@@ -199,9 +213,10 @@ const greeting = computed(() => (project.value ? `New chat in ${project.value.na
 				</div>
 				<Composer
 					ref="composer"
-					:running="!!live"
+					:draft-key="id ?? 'new'"
+					:running="running"
 					:disabled="creating || !app.gateway?.ok"
-					:placeholder="!app.gateway?.ok ? 'Connect the gateway API to chat' : live ? 'Redirect Hermes' : undefined"
+					:placeholder="!app.gateway?.ok ? 'Connect the gateway API to chat' : running ? 'Redirect Hermes' : undefined"
 					autofocus
 					@send="send"
 					@stop="id && sessions.stop(id)"

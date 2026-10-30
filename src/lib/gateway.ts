@@ -71,6 +71,32 @@ export type ApprovalRequest = {
 	[k: string]: unknown
 }
 
+export type RunStatus = {
+	run_id: string
+	status: 'queued' | 'running' | 'waiting_for_approval' | 'completed' | 'failed' | 'cancelled' | string
+	approval?: ApprovalRequest
+	pending_controls?: Array<{
+		kind: string
+		prompt_id?: string
+		execution_generation?: number
+		command?: string
+		description?: string
+		choices?: string[]
+	}>
+	[k: string]: unknown
+}
+
+/** The approval a run is waiting on, in the shape `approve` takes. */
+export function pendingApproval(status: RunStatus | null | undefined): ApprovalRequest | undefined {
+	if (status?.status !== 'waiting_for_approval') return
+	const c = status.pending_controls?.find((x) => x.kind === 'approval')
+	if (c) {
+		const { prompt_id, kind: _, ...rest } = c
+		return { ...rest, run_id: status.run_id, ...(prompt_id ? { request_id: prompt_id } : {}) }
+	}
+	return status.approval ? { ...status.approval, run_id: status.run_id } : undefined
+}
+
 export type ChatEvent =
 	| { type: 'run.started'; run_id: string; session_id: string }
 	| { type: 'assistant.delta'; delta: string }
@@ -104,6 +130,9 @@ export const gateway = {
 			(r) => r.data,
 		),
 
+	/** Runs streaming through this Caduceus server right now, by session id (any tab or device). */
+	activeRuns: () => get<Record<string, string>>('ui-api/runs'),
+	run: (runId: string) => get<RunStatus>(`${GW}/v1/runs/${enc(runId)}`),
 	stopRun: (runId: string) => post(`${GW}/v1/runs/${enc(runId)}/stop`),
 	steer: (runId: string, input: string) => post(`${GW}/v1/runs/${enc(runId)}/steer`, { input }),
 	approve: (req: ApprovalRequest, choice: string) =>
