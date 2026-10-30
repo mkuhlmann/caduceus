@@ -34,6 +34,27 @@ if (process.platform === 'win32') {
 	kernel32.symbols.SetEnvironmentVariableW(wide('WEBVIEW2_USER_DATA_FOLDER'), wide(join(dataDir, 'webview')))
 }
 
+// WebKitGTK sandboxes its web process with bubblewrap, which needs unprivileged user namespaces. Where
+// they are blocked (Ubuntu 24.04 and later restrict them through AppArmor), WebKit aborts the whole app.
+// The window only shows the local relay, and outside links open in the browser, so run without the
+// sandbox there rather than not at all.
+if (process.platform === 'linux' && !process.env.WEBKIT_DISABLE_SANDBOX_THIS_IS_DANGEROUS && !canSandbox()) {
+	const libc = dlopen('libc.so.6', {
+		setenv: { args: [FFIType.cstring, FFIType.cstring, FFIType.i32], returns: FFIType.i32 },
+	})
+	const c = (s: string) => ptr(Buffer.from(s + '\0'))
+	libc.symbols.setenv(c('WEBKIT_DISABLE_SANDBOX_THIS_IS_DANGEROUS'), c('1'), 1)
+}
+
+function canSandbox() {
+	try {
+		const probe = ['bwrap', '--unshare-user', '--ro-bind', '/', '/', 'true']
+		return Bun.spawnSync(probe, { stdio: ['ignore', 'ignore', 'ignore'] }).exitCode === 0
+	} catch {
+		return false
+	}
+}
+
 /**
  * Browser storage (theme, cached probes) belongs to the page's origin, port included. A port derived
  * from the data folder stays the same between launches, so those settings survive a restart.
