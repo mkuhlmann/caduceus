@@ -60,6 +60,8 @@ jobs:
   # Every push to main builds the image as `main`; a release additionally tags it with the version and `latest`.
   docker:
     needs: release-please
+    # Still publish `main` when release-please itself fails.
+    if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
     env:
       RELEASED: ${{ needs.release-please.outputs.release_created == 'true' }}
