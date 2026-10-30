@@ -2,9 +2,10 @@
 
 A lightweight web and desktop frontend for [Hermes Agent](https://github.com/NousResearch/hermes-agent). It runs anywhere: on your laptop, on a server, in a container, or as a desktop app. It talks to Hermes only through its public HTTP APIs, so nothing has to be installed on the agent's machine.
 
-![A chat with Hermes mid-run: finished tool steps, a running command and the reply streaming in](docs/screenshot-chat.png)
-
-![The schedules page listing active and paused cron jobs with their next and last runs](docs/screenshot-schedules.png)
+<p>
+<img src="docs/screenshot-chat.png" width="49%" alt="A chat with Hermes mid-run: finished tool steps, a running command and the reply streaming in">
+<img src="docs/screenshot-schedules.png" width="49%" alt="The schedules page listing active and paused cron jobs with their next and last runs">
+</p>
 
 ## Why it exists
 
@@ -154,12 +155,14 @@ Run the compiled binary with `CADUCEUS_DIST` pointing at `dist/`.
 `desktop/webview` builds the desktop app as one executable: the relay, the built UI and a native window from [webview-bun](https://github.com/tr1ckydev/webview-bun). It does not bundle a browser; the window is the system webview (WebView2 on Windows, WebKitGTK on Linux). The relay runs in a worker on a localhost port that stays the same between launches.
 
 - `bun run desktop` runs it from source.
-- `bun run desktop:win` builds `desktop/webview/out/Caduceus-<version>-x64-portable.zip` (about 55 MB). Unzip it anywhere, including a USB stick, and run `Caduceus.exe`. While the file named `portable` sits next to the exe, the connection and projects go into a `data` folder beside it. Delete that file to use `%APPDATA%\Caduceus` instead. Windows 10 needs the [WebView2 runtime](https://developer.microsoft.com/microsoft-edge/webview2/); Windows 11 ships it.
-- `bun run desktop:linux` builds `desktop/webview/out/caduceus-<version>-linux-x64.tar.gz` (about 52 MB). It needs GTK 4 and WebKitGTK 6.0 on the system: `sudo apt install libgtk-4-1 libwebkitgtk-6.0-4`.
+- `bun run desktop:win` builds `desktop/webview/out/Caduceus-<version>-x64.exe` (about 115 MB), which keeps its data in `%APPDATA%\Caduceus`, and `Caduceus-<version>-x64-portable.zip` (about 55 MB). Unzip the zip anywhere, including a USB stick, and run `Caduceus.exe`. While the file named `portable` sits next to the exe, the connection and projects go into a `data` folder beside it. Delete that file to use `%APPDATA%\Caduceus` instead. Windows 10 needs the [WebView2 runtime](https://developer.microsoft.com/microsoft-edge/webview2/); Windows 11 ships it.
+- `bun run desktop:linux` builds `desktop/webview/out/Caduceus-<version>-x86_64.AppImage` (about 50 MB). Building it needs [appimagetool](https://github.com/AppImage/appimagetool/releases) on `PATH` or in `$APPIMAGETOOL`. The AppImage does not bundle the webview; it needs GTK 4 and WebKitGTK 6.0 on the system: `sudo apt install libgtk-4-1 libwebkitgtk-6.0-4`.
 
 Both targets build from Linux. Set `CADUCEUS_DEVTOOLS=1` to get the webview's developer tools.
 
-`desktop/electron` is the earlier Electron shell, kept for comparison (`bun run electron`, `bun run electron:win`). It ships Chromium and a separate relay binary, about 180 MB zipped.
+## Releases
+
+Versions are managed by [release-please](https://github.com/googleapis/release-please). It reads [Conventional Commits](https://www.conventionalcommits.org/) on `main` (`feat:`, `fix:`, `feat!:`) and keeps a release pull request open that bumps `package.json` and `CHANGELOG.md`. Merging it tags the version and creates the GitHub release; the release workflow then tags the Docker image on `ghcr.io` with the version, `<major>.<minor>` and `latest`, and builds the AppImage, the exe and the portable zip and attaches them to the release. Every push to `main` also publishes the image as `main`; desktop apps are built only for releases.
 
 The UI uses hash routing and relative URLs, and has no shell-specific code. Any other webview wrapper can host it the same way: start `caduceus-server` on `127.0.0.1`, then point the webview at it.
 
@@ -168,5 +171,5 @@ The UI uses hash routing and relative URLs, and has no shell-specific code. Any 
 ```
 src/        Vue 3 frontend (Pinia, vue-router, Tailwind v4)
 server/     Elysia relay: static files, auth, proxy to Hermes, project store
-desktop/    Desktop app (webview), earlier Electron shell
+desktop/    Desktop app (webview)
 ```

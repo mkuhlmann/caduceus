@@ -2,9 +2,9 @@
 // and the webview library into one executable per target.
 //
 //   bun desktop/webview/build.ts                 only write assets.gen.ts, for running main.ts from source
-//   bun desktop/webview/build.ts windows-x64     portable zip in desktop/webview/out
-//   bun desktop/webview/build.ts linux-x64       tar.gz in desktop/webview/out
-import { mkdirSync, readdirSync, rmSync, statSync } from 'node:fs'
+//   bun desktop/webview/build.ts windows-x64     exe and portable zip in desktop/webview/out
+//   bun desktop/webview/build.ts linux-x64       AppImage in desktop/webview/out (needs appimagetool)
+import { chmodSync, copyFileSync, mkdirSync, readdirSync, rmSync, statSync, symlinkSync } from 'node:fs'
 import { join, relative } from 'node:path'
 import { deflateRawSync } from 'node:zlib'
 
@@ -14,10 +14,10 @@ const dist = join(root, 'dist')
 const out = join(here, 'out')
 const { version } = await Bun.file(join(root, 'package.json')).json()
 
-const targets: Record<string, { bun: string; exe: string; pack: (exe: string) => Promise<string> }> = {
+const targets: Record<string, { bun: string; exe: string; pack: (exe: string) => Promise<string[]> }> = {
 	'windows-x64': { bun: 'bun-windows-x64', exe: 'Caduceus.exe', pack: packWindows },
-	'linux-x64': { bun: 'bun-linux-x64', exe: 'caduceus', pack: (exe) => packLinux(exe, 'x64') },
-	'linux-arm64': { bun: 'bun-linux-arm64', exe: 'caduceus', pack: (exe) => packLinux(exe, 'arm64') },
+	'linux-x64': { bun: 'bun-linux-x64', exe: 'caduceus', pack: (exe) => packLinux(exe, 'x86_64') },
+	'linux-arm64': { bun: 'bun-linux-arm64', exe: 'caduceus', pack: (exe) => packLinux(exe, 'aarch64') },
 }
 
 const wanted = process.argv.slice(2)
@@ -36,8 +36,8 @@ for (const t of wanted) {
 	mkdirSync(stage, { recursive: true })
 	const exe = join(stage, target.exe)
 	await compile(target.bun, exe)
-	const artifact = await target.pack(exe)
-	console.log(`${artifact} (${(statSync(artifact).size / 1e6).toFixed(1)} MB)`)
+	for (const artifact of await target.pack(exe))
+		console.log(`${artifact} (${(statSync(artifact).size / 1e6).toFixed(1)} MB)`)
 }
 
 /** Every file in dist/, imported as an embedded file and registered with the relay by URL path. */
@@ -84,24 +84,59 @@ async function packWindows(exe: string) {
 	const notice =
 		'This file makes Caduceus portable: settings and data are kept in the "data" folder next to Caduceus.exe.\r\n' +
 		'Delete it to store them in your user profile (%APPDATA%\\Caduceus) instead.\r\n'
-	const artifact = join(out, `Caduceus-${version}-x64-portable.zip`)
+	const standalone = join(out, `Caduceus-${version}-x64.exe`)
+	copyFileSync(exe, standalone)
+	const portable = join(out, `Caduceus-${version}-x64-portable.zip`)
 	await Bun.write(
-		artifact,
+		portable,
 		zip([
 			{ name: 'Caduceus.exe', data: await Bun.file(exe).bytes() },
 			{ name: 'portable', data: Buffer.from(notice) },
 		]),
 	)
-	return artifact
+	return [standalone, portable]
 }
 
+/** An AppDir around the executable, turned into an AppImage by appimagetool (`$APPIMAGETOOL` or on PATH). */
 async function packLinux(exe: string, arch: string) {
-	const artifact = join(out, `caduceus-${version}-linux-${arch}.tar.gz`)
-	const proc = Bun.spawn(['tar', '-czf', artifact, '-C', join(exe, '..'), 'caduceus'], {
+	const appDir = join(exe, '..', 'Caduceus.AppDir')
+	mkdirSync(join(appDir, 'usr', 'bin'), { recursive: true })
+	copyFileSync(exe, join(appDir, 'usr', 'bin', 'caduceus'))
+	chmodSync(join(appDir, 'usr', 'bin', 'caduceus'), 0o755)
+	symlinkSync('usr/bin/caduceus', join(appDir, 'AppRun'))
+	copyFileSync(join(here, 'icon.png'), join(appDir, 'caduceus.png'))
+	symlinkSync('caduceus.png', join(appDir, '.DirIcon'))
+	await Bun.write(
+		join(appDir, 'caduceus.desktop'),
+		[
+			'[Desktop Entry]',
+			'Type=Application',
+			'Name=Caduceus',
+			'Comment=Web UI for Hermes Agent',
+			'Exec=caduceus',
+			'Icon=caduceus',
+			'Categories=Utility;',
+			'Terminal=false',
+			'',
+		].join('\n'),
+	)
+
+	const artifact = join(out, `Caduceus-${version}-${arch}.AppImage`)
+	const tool = process.env.APPIMAGETOOL || Bun.which('appimagetool')
+	if (!tool) {
+		console.error(
+			'appimagetool is missing. Download it from https://github.com/AppImage/appimagetool/releases ' +
+				'and put it on PATH, or point APPIMAGETOOL at it.',
+		)
+		process.exit(1)
+	}
+	// APPIMAGE_EXTRACT_AND_RUN lets appimagetool (itself an AppImage) run without FUSE, as on CI runners.
+	const proc = Bun.spawn([tool, '--no-appstream', appDir, artifact], {
+		env: { ...process.env, ARCH: arch, APPIMAGE_EXTRACT_AND_RUN: '1' },
 		stdio: ['ignore', 'inherit', 'inherit'],
 	})
 	if ((await proc.exited) !== 0) process.exit(1)
-	return artifact
+	return [artifact]
 }
 
 /** A plain deflate zip. Enough for two files, and it needs no zip tool on the build machine. */

@@ -10,8 +10,7 @@ import { dirname, join } from 'node:path'
 const packaged = import.meta.path.includes('$bunfs') || import.meta.path.includes('~BUN')
 
 // Portable mode: a file named `portable` next to the executable keeps all data (connection, projects,
-// browser storage) in a `data` folder beside it instead of in the user profile. The location matches
-// the earlier Electron shell, so an existing connection carries over.
+// browser storage) in a `data` folder beside it instead of in the user profile.
 function userDataDir() {
 	const exeDir = dirname(process.execPath)
 	if (packaged && existsSync(join(exeDir, 'portable'))) return join(exeDir, 'data')

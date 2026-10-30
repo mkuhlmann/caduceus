@@ -1,2 +1,0 @@
-This file makes Hermes portable: settings and data are kept in the "data" folder next to Hermes.exe.
-Delete it to store them in your user profile (%APPDATA%\Hermes) instead.
