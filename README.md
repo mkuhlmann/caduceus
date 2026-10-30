@@ -2,6 +2,10 @@
 
 A lightweight web and desktop frontend for [Hermes Agent](https://github.com/NousResearch/hermes-agent). It runs anywhere: on your laptop, on a server, in a container, or as a desktop app. It talks to Hermes only through its public HTTP APIs, so nothing has to be installed on the agent's machine.
 
+![A chat with Hermes mid-run: finished tool steps, a running command and the reply streaming in](docs/screenshot-chat.png)
+
+![The schedules page listing active and paused cron jobs with their next and last runs](docs/screenshot-schedules.png)
+
 ## Why it exists
 
 The existing ways to put a UI on Hermes assume you are on the agent's machine:
