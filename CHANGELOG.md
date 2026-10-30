@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.3.0](https://github.com/mkuhlmann/caduceus/compare/v0.2.1...v0.3.0) (2026-10-30)
+
+
+### Features
+
+* keep the chat scrolled to the latest output while a run grows it ([61feb36](https://github.com/mkuhlmann/caduceus/commit/61feb36d4488df38a9c43ff5ecce2f649af8f0a4))
+
 ## [0.2.1](https://github.com/mkuhlmann/caduceus/compare/v0.2.0...v0.2.1) (2026-10-30)
 
 
