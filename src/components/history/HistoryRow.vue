@@ -64,7 +64,7 @@ const count = computed(() => {
 
 <template>
 	<li class="group relative flex items-start gap-1 px-2 py-2.5 hover:bg-surface-2/50 sm:px-3">
-		<button class="min-w-0 flex-1 rounded-md text-left" @click="emit('open')">
+		<button class="pressable min-w-0 flex-1 rounded-md text-left" @click="emit('open')">
 			<span class="flex items-center gap-2">
 				<span
 					v-if="item.is_active"

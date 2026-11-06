@@ -7,7 +7,7 @@ import { useToasts } from '@/stores/toast'
 import { relative } from '@/lib/time'
 
 const props = defineProps<{ project: Project }>()
-const emit = defineEmits<{ close: [] }>()
+const emit = defineEmits<{ close: []; adding: [] }>()
 const sessions = useSessions()
 const projects = useProjects()
 const toasts = useToasts()
@@ -25,6 +25,7 @@ const rows = computed(() => {
 
 async function add() {
 	saving.value = true
+	emit('adding')
 	try {
 		for (const id of picked.value) await projects.assign(props.project.id, id)
 		toasts.push(picked.value.length === 1 ? 'Chat added' : `${picked.value.length} chats added`)

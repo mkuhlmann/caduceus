@@ -13,7 +13,7 @@ onBeforeUnmount(() => dialog.value?.close())
 <template>
 	<dialog
 		ref="dialog"
-		class="m-auto w-[calc(100%-2rem)] rounded-xl border border-line bg-surface p-0 text-ink shadow-2xl backdrop:bg-black/40"
+		class="modal m-auto w-[calc(100%-2rem)] rounded-xl border border-line bg-surface p-0 text-ink shadow-2xl backdrop:bg-black/40"
 		:class="wide ? 'max-w-3xl' : 'max-w-lg'"
 		@cancel.prevent="emit('close')"
 		@click.self="emit('close')"

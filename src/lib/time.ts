@@ -1,4 +1,9 @@
 const rtf = new Intl.RelativeTimeFormat(undefined, { numeric: 'auto' })
+// Formatters are costly to build (about 1ms each on a phone), so make them once and reuse them.
+const shortDate = new Intl.DateTimeFormat(undefined, { day: 'numeric', month: 'short' })
+const shortDateYear = new Intl.DateTimeFormat(undefined, { day: 'numeric', month: 'short', year: 'numeric' })
+const mediumDateTime = new Intl.DateTimeFormat(undefined, { dateStyle: 'medium', timeStyle: 'short' })
+const monthYear = new Intl.DateTimeFormat(undefined, { month: 'long', year: 'numeric' })
 
 export function toDate(v: number | string | null | undefined): Date | null {
 	if (v == null || v === '') return null
@@ -16,16 +21,12 @@ export function relative(v: number | string | null | undefined): string {
 	if (abs < 3600) return rtf.format(Math.round(diff / 60), 'minute')
 	if (abs < 86400) return rtf.format(Math.round(diff / 3600), 'hour')
 	if (abs < 86400 * 7) return rtf.format(Math.round(diff / 86400), 'day')
-	return d.toLocaleDateString(undefined, {
-		day: 'numeric',
-		month: 'short',
-		year: d.getFullYear() === new Date().getFullYear() ? undefined : 'numeric',
-	})
+	return (d.getFullYear() === new Date().getFullYear() ? shortDate : shortDateYear).format(d)
 }
 
 export function dateTime(v: number | string | null | undefined): string {
 	const d = toDate(v)
-	return d ? d.toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' }) : ''
+	return d ? mediumDateTime.format(d) : ''
 }
 
 /** Group label for a sidebar list: Today, Yesterday, Previous 7 days, Month Year. */
@@ -38,5 +39,5 @@ export function dayGroup(v: number | string | null | undefined): string {
 	if (d >= start) return 'Today'
 	if (days <= 1) return 'Yesterday'
 	if (days <= 7) return 'Previous 7 days'
-	return d.toLocaleDateString(undefined, { month: 'long', year: 'numeric' })
+	return monthYear.format(d)
 }

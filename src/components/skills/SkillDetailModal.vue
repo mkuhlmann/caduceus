@@ -1,8 +1,10 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed, ref } from 'vue'
 import Modal from '@/components/Modal.vue'
+import Skeleton from '@/components/Skeleton.vue'
 import { dashboard } from '@/lib/dashboard'
 import { renderMarkdown, handleCodeCopy } from '@/lib/markdown'
+import { useResource } from '@/lib/resource'
 import { useToasts } from '@/stores/toast'
 import { parseSkill } from './frontmatter'
 
@@ -10,28 +12,20 @@ const props = defineProps<{ name: string }>()
 const emit = defineEmits<{ close: [] }>()
 const toasts = useToasts()
 
-const content = ref('')
-const path = ref('')
+const res = useResource(
+	() => `skills:content:${props.name}`,
+	() => dashboard.skillContent(props.name),
+)
+const content = computed(() => res.data.value?.content ?? '')
+const path = computed(() => res.data.value?.path ?? '')
+const loading = computed(() => res.pending.value)
+const error = computed(() => (res.data.value ? '' : res.error.value))
 const draft = ref('')
 const editing = ref(false)
-const loading = ref(true)
-const error = ref('')
 const saving = ref(false)
 
 const parsed = computed(() => parseSkill(content.value))
 const html = computed(() => renderMarkdown(parsed.value.body))
-
-onMounted(async () => {
-	try {
-		const r = await dashboard.skillContent(props.name)
-		content.value = r.content
-		path.value = r.path
-	} catch (e) {
-		error.value = (e as Error).message
-	} finally {
-		loading.value = false
-	}
-})
 
 function edit() {
 	draft.value = content.value
@@ -42,7 +36,7 @@ async function save() {
 	saving.value = true
 	try {
 		await dashboard.saveSkillContent(props.name, draft.value)
-		content.value = draft.value
+		res.mutate((d) => (d ? { ...d, content: draft.value } : d))
 		editing.value = false
 		toasts.push('Skill saved')
 	} catch (e) {
@@ -55,8 +49,8 @@ async function save() {
 
 <template>
 	<Modal :title="parsed.meta.name || name" wide @close="emit('close')">
-		<p v-if="loading" class="text-ink-2">Loading skill...</p>
-		<p v-else-if="error" class="text-rose">Could not load this skill. {{ error }}</p>
+		<p v-if="error" class="text-rose">Could not load this skill. {{ error }}</p>
+		<Skeleton v-else-if="loading" variant="lines" :count="8" label="Loading skill" />
 		<template v-else-if="editing">
 			<label class="label" for="skill-src">SKILL.md</label>
 			<textarea id="skill-src" v-model="draft" class="field min-h-[50vh] font-mono text-xs" spellcheck="false" />

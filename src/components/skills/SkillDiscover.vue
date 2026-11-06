@@ -1,57 +1,57 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, ref, shallowRef, watch } from 'vue'
 import { Check, Download } from 'lucide-vue-next'
+import Skeleton from '@/components/Skeleton.vue'
 import { dashboard, type HubSkill } from '@/lib/dashboard'
+import { useResource } from '@/lib/resource'
 import { useToasts } from '@/stores/toast'
 
 const emit = defineEmits<{ installed: [] }>()
 const toasts = useToasts()
 
 const query = ref('')
-const official = ref<HubSkill[]>([])
-const results = ref<HubSkill[]>([])
-const loading = ref(false)
-const error = ref('')
+/** The query the results belong to: follows `query` after a short pause, and at once when it is cleared. */
+const searched = ref('')
 const installs = ref<Record<string, { action: string; lines: string[]; running: boolean; failed?: boolean }>>({})
 const done = ref(new Set<string>())
 const timers = new Map<string, number>()
 let debounce = 0
-let seq = 0
 
-const list = computed(() => (query.value.trim() ? results.value : official.value))
-
-async function loadOfficial() {
-	loading.value = true
-	error.value = ''
-	try {
-		official.value = (await dashboard.hubOfficial()).skills
-	} catch (e) {
-		error.value = (e as Error).message
-	} finally {
-		loading.value = false
-	}
-}
-onMounted(loadOfficial)
+const official = useResource('skills:hub:official', async () => (await dashboard.hubOfficial()).skills)
+const search = useResource(
+	() => (searched.value ? `skills:hub:search:${searched.value}` : null),
+	async () => (await dashboard.hubSearch(searched.value)).results,
+)
+// The last search results stay on screen while the next search loads, instead of the list going blank.
+const lastResults = shallowRef<HubSkill[] | null>(null)
+watch(
+	() => search.data.value,
+	(r) => r && (lastResults.value = r),
+)
 
 watch(query, (q) => {
 	clearTimeout(debounce)
-	if (!q.trim()) return
-	loading.value = true
-	debounce = window.setTimeout(async () => {
-		const mine = ++seq
-		try {
-			const r = await dashboard.hubSearch(q.trim())
-			if (mine === seq) {
-				results.value = r.results
-				error.value = ''
-			}
-		} catch (e) {
-			if (mine === seq) error.value = (e as Error).message
-		} finally {
-			if (mine === seq) loading.value = false
-		}
-	}, 350)
+	const t = q.trim()
+	if (!t) {
+		searched.value = ''
+		lastResults.value = null
+		return
+	}
+	debounce = window.setTimeout(() => (searched.value = t), 350)
 })
+
+const showingResults = computed(() => !!searched.value && !!lastResults.value)
+const list = computed(() => (showingResults.value ? lastResults.value! : (official.data.value ?? [])))
+const pending = computed(() => !list.value.length && (official.pending.value || search.pending.value))
+const refreshing = computed(
+	() =>
+		!pending.value &&
+		(query.value.trim() !== searched.value ||
+			search.pending.value ||
+			search.refreshing.value ||
+			(!showingResults.value && official.refreshing.value)),
+)
+const error = computed(() => (searched.value ? search.error.value : official.data.value ? '' : official.error.value))
 
 const trust = (t?: string) =>
 	({ builtin: 'Official', official: 'Official', trusted: 'Trusted', community: 'Community' })[t ?? ''] ?? t ?? ''
@@ -80,6 +80,7 @@ function poll(id: string) {
 				done.value.add(id)
 				toasts.push('Skill installed')
 				emit('installed')
+				official.reload()
 			} else {
 				st.failed = true
 				toasts.error('The install did not finish. Check the log below.')
@@ -110,13 +111,16 @@ onBeforeUnmount(() => {
 			placeholder="Search by name or topic"
 			autocomplete="off"
 		/>
-		<h2 v-if="!query.trim()" class="mt-6 text-lg font-semibold">Official skills</h2>
+		<h2 v-if="!showingResults" class="mt-6 text-lg font-semibold">Official skills</h2>
+		<div class="mt-2 h-0.5">
+			<div v-if="refreshing" class="refresh-bar" role="status" aria-label="Searching the hub" />
+		</div>
 		<p v-if="error" class="mt-4 text-rose">Could not load skills from the hub. {{ error }}</p>
-		<p v-else-if="loading && !list.length" class="mt-4 text-ink-2">Loading...</p>
+		<Skeleton v-else-if="pending" variant="rows" :count="6" label="Loading skills from the hub" />
 		<p v-else-if="!list.length" class="mt-4 text-ink-2">
-			{{ query.trim() ? 'No skills match that search.' : 'The hub has no official skills listed.' }}
+			{{ showingResults ? 'No skills match that search.' : 'The hub has no official skills listed.' }}
 		</p>
-		<ul class="mt-2 divide-y divide-line">
+		<ul class="divide-y divide-line">
 			<li v-for="s in list" :key="s.identifier" class="py-3">
 				<div class="flex items-start justify-between gap-4">
 					<div class="min-w-0 max-w-[72ch]">

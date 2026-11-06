@@ -1,68 +1,90 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, shallowRef, watch } from 'vue'
 import { Plus } from 'lucide-vue-next'
 import PageHeader from '@/components/PageHeader.vue'
 import EmptyState from '@/components/EmptyState.vue'
-import TaskCard from '@/components/board/TaskCard.vue'
+import Skeleton from '@/components/Skeleton.vue'
+import BoardColumn from '@/components/board/BoardColumn.vue'
 import TaskDetail from '@/components/board/TaskDetail.vue'
 import NewTaskModal from '@/components/board/NewTaskModal.vue'
 import NewBoardModal from '@/components/board/NewBoardModal.vue'
 import { COLUMNS, canDrop, label } from '@/components/board/columns'
-import { dashboard, type KanbanBoard, type KanbanTask } from '@/lib/dashboard'
+import { dashboard, type KanbanTask } from '@/lib/dashboard'
+import { useResource } from '@/lib/resource'
 import { useApp } from '@/stores/app'
 import { useToasts } from '@/stores/toast'
 
 type Col = { name: string; tasks: KanbanTask[] }
+type BoardData = Awaited<ReturnType<typeof dashboard.board>>
 
 const app = useApp()
 const toasts = useToasts()
 
-const boards = ref<KanbanBoard[]>([])
-const board = ref<string | undefined>()
-const columns = ref<Col[]>([])
-const assignees = ref<string[]>([])
-const loading = ref(true)
-const error = ref('')
-const openId = ref<string | null>(null)
+const connected = computed(() => !!app.dashboard?.ok)
+/** The board the user picked; undefined means the dashboard's current board, so the first load needs no extra round trip. */
+const picked = ref<string | undefined>()
+const openTask = ref<KanbanTask | null>(null)
 const showNewTask = ref(false)
 const showNewBoard = ref(false)
 const mobileCol = ref('ready')
-const dragging = ref<{ id: string; from: string } | null>(null)
-const dropOver = ref<string | null>(null)
+// The card being dragged. Plain on purpose: pointer moves read it, and nothing on screen renders from it.
+let drag: { id: string; from: string } | null = null
+/** Reactive twin of `drag`, for holding back refreshes until the drop. */
+const dragging = ref(false)
 
-const connected = computed(() => !!app.dashboard?.ok)
+const boardsRes = useResource(
+	() => (connected.value ? 'kanban:boards' : null),
+	() => dashboard.boards(),
+)
+const boards = computed(() => (boardsRes.data.value?.boards ?? []).filter((b) => !(b as any).archived))
+const board = computed({
+	get: () => picked.value ?? boardsRes.data.value?.current,
+	set: (b) => (picked.value = b),
+})
+
+// The current board is cached under '' whether it was picked or not, so picking it again is instant.
+const boardKey = computed(() => (picked.value && picked.value !== boardsRes.data.value?.current ? picked.value : ''))
+const boardRes = useResource<BoardData>(
+	() => (connected.value ? `kanban:board:${boardKey.value}` : null),
+	() => dashboard.board(boardKey.value || undefined),
+)
+const assignees = computed(() => [...new Set(boardRes.data.value?.assignees ?? [])])
+const error = computed(() => (boardRes.data.value ? '' : boardRes.error.value || boardsRes.error.value))
+const pending = computed(() => boardRes.pending.value || (!boardRes.data.value && boardsRes.pending.value))
+
+// What the board shows. A refresh that lands mid-drag waits until the drag ends, so the card under the pointer
+// never jumps or re-renders while it is being dragged.
+const columns = shallowRef<Col[]>([])
+// A poll usually brings the same tasks: keep unchanged columns as they were, so only changed columns re-render.
+const sig = new WeakMap<Col, string>()
+const signature = (c: Col) => {
+	let s = sig.get(c)
+	if (s === undefined) sig.set(c, (s = JSON.stringify(c.tasks)))
+	return s
+}
+function pick(d?: BoardData): Col[] {
+	const prev = new Map(columns.value.map((c) => [c.name, c]))
+	return (d?.columns ?? [])
+		.filter((c) => c.name in COLUMNS)
+		.map((c) => {
+			const old = prev.get(c.name)
+			return old && old !== c && signature(old) === signature(c) ? old : c
+		})
+}
+watch(
+	[() => boardRes.data.value, dragging],
+	([d, held]) => {
+		if (!held) columns.value = pick(d)
+	},
+	{ immediate: true },
+)
 const total = computed(() => columns.value.reduce((n, c) => n + c.tasks.length, 0))
 
-async function loadBoard(quiet = false) {
-	if (!quiet) loading.value = true
-	try {
-		const r = await dashboard.board(board.value)
-		// Do not clobber an in-flight drag with a poll result.
-		if (!dragging.value) columns.value = r.columns.filter((c) => c.name in COLUMNS)
-		const names = new Set(r.assignees ?? [])
-		assignees.value = [...names]
-		error.value = ''
-	} catch (e) {
-		if (!quiet || !columns.value.length) error.value = (e as Error).message
-	} finally {
-		loading.value = false
-	}
+const loadBoard = () => boardRes.reload()
+function retry() {
+	boardsRes.reload()
+	boardRes.reload()
 }
-
-async function init() {
-	loading.value = true
-	try {
-		const r = await dashboard.boards()
-		boards.value = r.boards.filter((b) => !(b as any).archived)
-		board.value = board.value && boards.value.some((b) => b.slug === board.value) ? board.value : r.current
-		await loadBoard()
-	} catch (e) {
-		error.value = (e as Error).message
-		loading.value = false
-	}
-}
-
-watch(board, (b, old) => old !== undefined && loadBoard())
 
 async function moveTask(id: string, from: string, to: string) {
 	if (from === to) return
@@ -70,67 +92,73 @@ async function moveTask(id: string, from: string, to: string) {
 		toasts.error(`Tasks can't be moved into ${label(to)} by hand.`)
 		return
 	}
-	const prev = columns.value
-	const src = prev.find((c) => c.name === from)
-	const task = src?.tasks.find((t) => t.id === id)
-	if (!task) return
-	columns.value = prev.map((c) =>
-		c.name === from
-			? { ...c, tasks: c.tasks.filter((t) => t.id !== id) }
-			: c.name === to
-				? { ...c, tasks: [{ ...task, status: to }, ...c.tasks] }
-				: c,
+	const prev = boardRes.data.value
+	const task = prev?.columns.find((c) => c.name === from)?.tasks.find((t) => t.id === id)
+	if (!prev || !task) return
+	boardRes.mutate((d) =>
+		d
+			? {
+					...d,
+					columns: d.columns.map((c) =>
+						c.name === from
+							? { ...c, tasks: c.tasks.filter((t) => t.id !== id) }
+							: c.name === to
+								? { ...c, tasks: [{ ...task, status: to }, ...c.tasks] }
+								: c,
+					),
+				}
+			: d,
 	)
 	try {
 		await dashboard.updateTask(id, { status: to }, board.value)
 		toasts.push(`Moved to ${label(to)}`)
 	} catch (e) {
-		columns.value = prev
+		boardRes.mutate(() => prev)
 		toasts.error((e as Error).message)
 	} finally {
-		loadBoard(true)
+		loadBoard()
 	}
 }
 
-function onDragStart(ev: DragEvent, t: KanbanTask) {
-	dragging.value = { id: t.id, from: t.status }
-	ev.dataTransfer?.setData('text/plain', t.id)
-	if (ev.dataTransfer) ev.dataTransfer.effectAllowed = 'move'
+const accepts = (to: string) => !!drag && canDrop(drag.from, to)
+function onDragStart(t: KanbanTask) {
+	drag = { id: t.id, from: t.status }
+	dragging.value = true
 }
 function onDragEnd() {
-	dragging.value = null
-	dropOver.value = null
+	drag = null
+	dragging.value = false
 }
-function onDragOver(ev: DragEvent, col: string) {
-	const d = dragging.value
-	if (!d || !canDrop(d.from, col)) return
-	ev.preventDefault()
-	dropOver.value = col
+function onDrop(to: string) {
+	const d = drag
+	if (d) moveTask(d.id, d.from, to)
+	onDragEnd()
 }
-function onDrop(ev: DragEvent, col: string) {
-	ev.preventDefault()
-	const d = dragging.value
-	dragging.value = null
-	dropOver.value = null
-	if (d) moveTask(d.id, d.from, col)
-}
+
+const openDetail = (t: KanbanTask) => (openTask.value = t)
 
 function onCreated(t: KanbanTask) {
 	showNewTask.value = false
 	mobileCol.value = t.status
-	loadBoard(true)
+	loadBoard()
+}
+
+function onBoardCreated(slug: string) {
+	showNewBoard.value = false
+	picked.value = slug
+	boardsRes.reload()
 }
 
 let timer: ReturnType<typeof setInterval> | undefined
 function tick() {
-	if (document.visibilityState === 'visible' && connected.value && !loading.value && !dragging.value) loadBoard(true)
+	if (document.visibilityState !== 'visible' || !connected.value || drag) return
+	if (!boardRes.pending.value && !boardRes.refreshing.value) loadBoard()
 }
 function onVisible() {
 	if (document.visibilityState === 'visible') tick()
 }
 
 onMounted(() => {
-	if (connected.value) init()
 	timer = setInterval(tick, 10_000)
 	document.addEventListener('visibilitychange', onVisible)
 })
@@ -138,7 +166,6 @@ onBeforeUnmount(() => {
 	clearInterval(timer)
 	document.removeEventListener('visibilitychange', onVisible)
 })
-watch(connected, (c) => c && init())
 </script>
 
 <template>
@@ -165,65 +192,51 @@ watch(connected, (c) => c && init())
 		<template v-else>
 			<p v-if="error" class="mx-6 mb-3 rounded-md bg-rose-soft px-3 py-2 text-sm text-rose md:mx-10">
 				Could not load the board: {{ error }}
-				<button class="underline" @click="init">Try again</button>
+				<button class="underline" @click="retry">Try again</button>
 			</p>
-			<p v-else-if="loading" class="px-6 text-ink-3 md:px-10">Loading board</p>
 
 			<template v-else>
-				<p v-if="!total" class="px-6 pb-3 text-ink-2 md:px-10">
+				<p v-if="!pending && !total" class="px-6 pb-3 text-ink-2 md:px-10">
 					Nothing on this board yet. Create a task, or put a rough idea in triage and let Hermes specify it.
 				</p>
 
-				<!-- Mobile: one column at a time -->
+				<!-- Mobile: one column at a time. Shown while loading too, so the columns do not jump down. -->
 				<div class="px-6 pb-3 md:hidden">
 					<label class="label" for="col-pick">Column</label>
-					<select id="col-pick" v-model="mobileCol" class="field">
-						<option v-for="c in columns" :key="c.name" :value="c.name">
-							{{ label(c.name) }} ({{ c.tasks.length }})
+					<select id="col-pick" v-model="mobileCol" class="field" :disabled="pending">
+						<option v-for="c in pending ? Object.keys(COLUMNS) : columns.map((c) => c.name)" :key="c" :value="c">
+							{{ label(c) }}{{ pending ? '' : ` (${columns.find((x) => x.name === c)?.tasks.length ?? 0})` }}
 						</option>
 					</select>
 				</div>
 
-				<div class="flex min-h-0 flex-1 gap-3 overflow-x-auto px-6 pb-8 md:px-10">
-					<section
+				<Skeleton v-if="pending" variant="cards" :count="8" label="Loading board" class="px-6 md:px-10" />
+
+				<div v-else class="flex min-h-0 flex-1 gap-3 overflow-x-auto px-6 pb-8 md:px-10">
+					<BoardColumn
 						v-for="c in columns"
 						:key="c.name"
-						class="min-h-0 w-full shrink-0 flex-col rounded-lg border bg-surface-2/50 md:w-72"
-						:class="[
-							c.name === mobileCol ? 'flex' : 'hidden md:flex',
-							dropOver === c.name ? 'border-ink-3' : 'border-line',
-						]"
-						:aria-label="label(c.name)"
-						@dragover="onDragOver($event, c.name)"
-						@dragleave="dropOver === c.name && (dropOver = null)"
-						@drop="onDrop($event, c.name)"
-					>
-						<header class="flex items-baseline justify-between px-3 pt-3 pb-2" :title="COLUMNS[c.name]?.hint">
-							<h2 class="flex items-center gap-2 text-sm font-semibold">
-								<span v-if="c.name === 'running' && c.tasks.length" class="size-2 rounded-full bg-gold" />
-								{{ label(c.name) }}
-							</h2>
-							<span class="text-xs text-ink-3">{{ c.tasks.length }}</span>
-						</header>
-						<p class="hidden px-3 pb-2 text-xs text-ink-3 md:block">{{ COLUMNS[c.name]?.hint }}</p>
-						<div class="min-h-24 flex-1 space-y-2 overflow-y-auto px-2 pb-2">
-							<div v-for="t in c.tasks" :key="t.id" @dragstart="onDragStart($event, t)" @dragend="onDragEnd">
-								<TaskCard :task="t" @open="openId = t.id" />
-							</div>
-							<p v-if="!c.tasks.length" class="px-1 py-4 text-sm text-ink-3">No tasks</p>
-						</div>
-					</section>
+						:name="c.name"
+						:tasks="c.tasks"
+						:active="c.name === mobileCol"
+						:accepts="accepts"
+						@dragstart="onDragStart"
+						@dragend="onDragEnd"
+						@drop="onDrop"
+						@open="openDetail"
+					/>
 				</div>
 			</template>
 		</template>
 
 		<TaskDetail
-			v-if="openId"
-			:id="openId"
+			v-if="openTask"
+			:id="openTask.id"
+			:initial="openTask"
 			:board="board"
 			:assignees="assignees"
-			@close="openId = null"
-			@changed="loadBoard(true)"
+			@close="openTask = null"
+			@changed="loadBoard"
 		/>
 		<NewTaskModal
 			v-if="showNewTask"
@@ -232,16 +245,6 @@ watch(connected, (c) => c && init())
 			@close="showNewTask = false"
 			@created="onCreated"
 		/>
-		<NewBoardModal
-			v-if="showNewBoard"
-			@close="showNewBoard = false"
-			@created="
-				(s) => {
-					showNewBoard = false
-					board = s
-					init()
-				}
-			"
-		/>
+		<NewBoardModal v-if="showNewBoard" @close="showNewBoard = false" @created="onBoardCreated" />
 	</div>
 </template>

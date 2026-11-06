@@ -31,7 +31,9 @@ onMounted(async () => {
 		<AppRail />
 		<main class="min-h-0 min-w-0 flex-1 overflow-hidden">
 			<RouterView v-slot="{ Component }">
-				<component :is="Component" />
+				<Transition name="page">
+					<component :is="Component" :key="$route.name" />
+				</Transition>
 			</RouterView>
 		</main>
 	</div>

@@ -3,8 +3,9 @@ import { computed, ref } from 'vue'
 import { ChevronRight } from 'lucide-vue-next'
 import type { AgentTurn, ApprovalStep, Step, TextStep, ToolStep } from '@/lib/turns'
 import { prettyToolName } from '@/lib/turns'
-import { renderMarkdown, handleCodeCopy } from '@/lib/markdown'
+import { handleCodeCopy } from '@/lib/markdown'
 import ToolWaypoint from './ToolWaypoint.vue'
+import MarkdownBlocks from './MarkdownBlocks.vue'
 
 const props = defineProps<{ turn: AgentTurn; status?: string }>()
 const emit = defineEmits<{ approve: [choice: string] }>()
@@ -71,12 +72,14 @@ const waiting = computed(() => props.turn.live && props.turn.steps.length === 0)
 			<ChevronRight :size="14" class="transition-transform" :class="{ 'rotate-90': showReasoning }" />
 			{{ turn.live && !turn.steps.length ? 'Thinking' : 'Thought process' }}
 		</button>
-		<p
-			v-if="showReasoning"
-			class="mb-3 max-w-[72ch] border-l-2 border-line pl-3 text-sm whitespace-pre-wrap text-ink-2"
-		>
-			{{ turn.reasoning }}
-		</p>
+		<Transition enter-from-class="rise-enter-from" enter-active-class="rise-enter-active">
+			<p
+				v-if="showReasoning"
+				class="mb-3 max-w-[72ch] border-l-2 border-line pl-3 text-sm whitespace-pre-wrap text-ink-2"
+			>
+				{{ turn.reasoning }}
+			</p>
+		</Transition>
 
 		<p v-if="waiting && !turn.reasoning" class="route-thread py-1 pl-6 text-sm text-ink-3">
 			<span class="live-dot" />{{ status || 'Working' }}
@@ -93,16 +96,19 @@ const waiting = computed(() => props.turn.live && props.turn.steps.length === 0)
 					<ChevronRight :size="14" class="transition-transform" :class="{ 'rotate-90': isOpen(seg, idx) }" />
 					{{ stretchLabel(seg.steps) }}
 				</button>
-				<ul v-if="isOpen(seg, idx)">
-					<ToolWaypoint v-for="(s, i) in seg.steps" :key="i" :step="s" />
-				</ul>
+				<Transition enter-from-class="rise-enter-from" enter-active-class="rise-enter-active">
+					<ul v-if="isOpen(seg, idx)">
+						<ToolWaypoint v-for="(s, i) in seg.steps" :key="i" :step="s" />
+					</ul>
+				</Transition>
 			</div>
 
-			<div
+			<MarkdownBlocks
 				v-else-if="seg.kind === 'text'"
 				class="prose-h my-2"
 				:class="{ 'streaming-caret': turn.live && idx === segments.length - 1 }"
-				v-html="renderMarkdown(seg.step.text)"
+				:source="seg.step.text"
+				:streaming="turn.live && idx === segments.length - 1"
 			/>
 
 			<div v-else class="route-thread my-3">
@@ -145,6 +151,28 @@ const waiting = computed(() => props.turn.live && props.turn.steps.length === 0)
 </template>
 
 <style scoped>
+/*
+  Finished turns skip layout and paint while off screen, which keeps long conversations cheap to open and
+  scroll. Containment stops margins collapsing through the turn, so its outer margins are dropped, and the
+  small inline padding keeps the route dots and focus rings at its edge from being clipped.
+*/
+.agent-turn:not(.live) {
+	padding-inline: 6px;
+	margin-inline: -6px;
+}
+/* Only where the browser keeps the scroll position steady as skipped turns above get their real height. */
+@supports (overflow-anchor: auto) {
+	.agent-turn:not(.live) {
+		content-visibility: auto;
+		contain-intrinsic-size: auto 320px;
+	}
+}
+.agent-turn > :first-child {
+	margin-top: 0;
+}
+.agent-turn > :last-child {
+	margin-bottom: 0;
+}
 /* Replies run a little wider than general reading text: they carry code, tables and command output. */
 .agent-turn .prose-h {
 	max-width: 88ch;

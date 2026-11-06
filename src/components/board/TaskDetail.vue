@@ -1,41 +1,45 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed, ref, watch } from 'vue'
 import { RouterLink } from 'vue-router'
 import Modal from '@/components/Modal.vue'
+import Skeleton from '@/components/Skeleton.vue'
 import { dashboard, type KanbanTask } from '@/lib/dashboard'
 import { renderMarkdown } from '@/lib/markdown'
+import { useResource } from '@/lib/resource'
 import { dateTime, relative } from '@/lib/time'
 import { useToasts } from '@/stores/toast'
 import { label, targets } from './columns'
 
-const props = defineProps<{ id: string; board?: string; assignees: string[] }>()
+/** `initial` is the card the user tapped, so the title shows at once while the full task loads. */
+const props = defineProps<{ id: string; board?: string; assignees: string[]; initial?: KanbanTask }>()
 const emit = defineEmits<{ close: []; changed: []; move: [id: string, to: string] }>()
 const toasts = useToasts()
 
-const task = ref<KanbanTask | null>(null)
-const comments = ref<any[]>([])
-const events = ref<any[]>([])
-const runs = ref<any[]>([])
-const loadError = ref('')
+const res = useResource(
+	() => `kanban:task:${props.board ?? ''}:${props.id}`,
+	() => dashboard.task(props.id, props.board),
+)
+const task = computed(() => res.data.value?.task ?? null)
+const comments = computed(() => res.data.value?.comments ?? [])
+const events = computed(() => res.data.value?.events ?? [])
+const runs = computed(() => res.data.value?.runs ?? [])
+const loadError = computed(() => (res.data.value ? '' : res.error.value))
 const assignee = ref('')
 const priority = ref(0)
 const comment = ref('')
 const busy = ref(false)
+const load = () => res.reload()
 
-async function load() {
-	try {
-		const r = await dashboard.task(props.id, props.board)
-		task.value = r.task
-		comments.value = r.comments ?? []
-		events.value = r.events ?? []
-		runs.value = r.runs ?? []
-		assignee.value = r.task.assignee ?? ''
-		priority.value = r.task.priority ?? 0
-	} catch (e) {
-		loadError.value = (e as Error).message
-	}
-}
-onMounted(load)
+// Fill the fields from the loaded task, but leave a field alone if the user already started editing it.
+watch(
+	task,
+	(t, old) => {
+		if (!t) return
+		if (!old || assignee.value === (old.assignee ?? '')) assignee.value = t.assignee ?? ''
+		if (!old || priority.value === (old.priority ?? 0)) priority.value = t.priority ?? 0
+	},
+	{ immediate: true },
+)
 
 const moveOptions = computed(() => (task.value ? targets(task.value.status) : []))
 const html = computed(() => (task.value?.body ? renderMarkdown(task.value.body) : ''))
@@ -47,12 +51,15 @@ const resultHtml = computed(() => {
 
 async function patch(body: Record<string, unknown>, done: string) {
 	busy.value = true
+	const prev = res.data.value
+	res.mutate((d) => (d ? { ...d, task: { ...d.task, ...body } } : d))
 	try {
 		await dashboard.updateTask(props.id, body, props.board)
 		toasts.push(done)
 		emit('changed')
 		await load()
 	} catch (e) {
+		res.mutate(() => prev)
 		toasts.error((e as Error).message)
 		await load()
 	} finally {
@@ -120,9 +127,9 @@ function eventText(ev: any) {
 </script>
 
 <template>
-	<Modal :title="task?.title ?? 'Task'" wide @close="emit('close')">
+	<Modal :title="task?.title ?? initial?.title ?? 'Task'" wide @close="emit('close')">
 		<p v-if="loadError" class="text-rose">Could not load this task: {{ loadError }}</p>
-		<p v-else-if="!task" class="text-ink-3">Loading task</p>
+		<Skeleton v-else-if="!task" variant="lines" :count="6" label="Loading task" />
 		<div v-else class="space-y-6">
 			<div class="grid gap-4 sm:grid-cols-3">
 				<div>

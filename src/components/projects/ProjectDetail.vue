@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, reactive, ref, watchEffect } from 'vue'
+import { computed, onBeforeUnmount, reactive, ref, watchEffect } from 'vue'
 import { useRouter } from 'vue-router'
 import { ArrowLeft, Pencil, Plus, Trash2, X } from 'lucide-vue-next'
 import PageHeader from '@/components/PageHeader.vue'
@@ -17,6 +17,16 @@ const router = useRouter()
 const sessions = useSessions()
 const projects = useProjects()
 const toasts = useToasts()
+
+// Rows only animate in or out right after the user adds or removes chats, never on the first paint.
+const animate = ref(false)
+let animateTimer: ReturnType<typeof setTimeout> | undefined
+function animateNext() {
+	animate.value = true
+	clearTimeout(animateTimer)
+	animateTimer = setTimeout(() => (animate.value = false), 600)
+}
+onBeforeUnmount(() => clearTimeout(animateTimer))
 
 const editing = ref(false)
 const adding = ref(false)
@@ -44,6 +54,7 @@ function newChat() {
 }
 
 async function removeChat(id: string) {
+	animateNext()
 	try {
 		await projects.update(props.project.id, { sessionIds: props.project.sessionIds.filter((x) => x !== id) })
 		toasts.push('Chat removed from project')
@@ -55,10 +66,12 @@ async function removeChat(id: string) {
 async function removeProject() {
 	if (!confirm(`Delete the project "${props.project.name}"? Its chats stay in Hermes; only the grouping is removed.`))
 		return
+	// The store drops the project at once, so go back to the list right away.
+	const removing = projects.remove(props.project.id)
+	emit('deleted')
 	try {
-		await projects.remove(props.project.id)
+		await removing
 		toasts.push('Project deleted')
-		emit('deleted')
 	} catch (e) {
 		toasts.error(`Could not delete the project: ${(e as Error).message}`)
 	}
@@ -94,11 +107,17 @@ async function removeProject() {
 			<p v-if="!rows.length" class="mt-3 text-ink-2">
 				No chats yet. Start a new chat in this project, or add chats you already have.
 			</p>
-			<ul v-else class="mt-3 divide-y divide-line border-y border-line">
+			<TransitionGroup
+				v-else
+				tag="ul"
+				class="relative mt-3 divide-y divide-line border-y border-line"
+				:name="animate ? 'rise' : 'none'"
+				:leave-active-class="animate ? 'rise-leave-active absolute inset-x-0' : undefined"
+			>
 				<li v-for="r in rows" :key="r.id" class="flex items-center gap-1 px-2 py-2.5 hover:bg-surface-2/50">
 					<button
 						v-if="r.s"
-						class="min-w-0 flex-1 rounded-md text-left"
+						class="pressable min-w-0 flex-1 rounded-md text-left"
 						@click="router.push(`/chat/${encodeURIComponent(r.id)}`)"
 					>
 						<span class="flex items-center gap-2">
@@ -128,7 +147,7 @@ async function removeProject() {
 						<X :size="16" />
 					</button>
 				</li>
-			</ul>
+			</TransitionGroup>
 
 			<div class="mt-10 border-t border-line pt-4">
 				<button class="btn-danger" @click="removeProject"><Trash2 :size="16" /> Delete project</button>
@@ -136,6 +155,6 @@ async function removeProject() {
 		</div>
 
 		<ProjectFormModal v-if="editing" :project="project" @close="editing = false" />
-		<AddChatsModal v-if="adding" :project="project" @close="adding = false" />
+		<AddChatsModal v-if="adding" :project="project" @adding="animateNext" @close="adding = false" />
 	</div>
 </template>

@@ -1,13 +1,15 @@
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref } from 'vue'
+import { computed, reactive, ref } from 'vue'
 import PageHeader from '@/components/PageHeader.vue'
 import EmptyState from '@/components/EmptyState.vue'
+import Skeleton from '@/components/Skeleton.vue'
 import ConfigSection from '@/components/settings/ConfigSection.vue'
 import ModelSection from '@/components/settings/ModelSection.vue'
 import EnvSection from '@/components/settings/EnvSection.vue'
 import InterfaceSection from '@/components/settings/InterfaceSection.vue'
 import { categoryName, getIn, same, setIn } from '@/components/settings/util'
-import { dashboard, type SchemaField } from '@/lib/dashboard'
+import { dashboard } from '@/lib/dashboard'
+import { useResource } from '@/lib/resource'
 import { useApp } from '@/stores/app'
 import { useToasts } from '@/stores/toast'
 import { useRouter } from 'vue-router'
@@ -16,33 +18,26 @@ const app = useApp()
 const toasts = useToasts()
 const router = useRouter()
 
-const config = ref<Record<string, any>>({})
-const fields = ref<Record<string, SchemaField>>({})
-const order = ref<string[]>([])
+const res = useResource(
+	() => (app.dashboard?.ok ? 'settings:config' : null),
+	async () => {
+		const [config, s] = await Promise.all([dashboard.config(), dashboard.schema()])
+		const present = new Set(Object.values(s.fields).map((f) => f.category ?? 'general'))
+		const known = s.category_order.filter((c) => present.has(c))
+		const order = [...known, ...[...present].filter((c) => !known.includes(c)).sort()]
+		return { config, fields: s.fields, order }
+	},
+)
+const config = computed(() => res.data.value?.config ?? {})
+const fields = computed(() => res.data.value?.fields ?? {})
+const order = computed(() => res.data.value?.order ?? [])
+const loading = computed(() => res.pending.value)
+const error = computed(() => (res.data.value ? '' : res.error.value))
+const load = () => res.reload()
 const dirty = reactive<Record<string, unknown>>({})
-const loading = ref(false)
-const error = ref('')
 const saving = ref(false)
 const section = ref('model')
 const search = ref('')
-
-async function load() {
-	loading.value = true
-	error.value = ''
-	try {
-		const [c, s] = await Promise.all([dashboard.config(), dashboard.schema()])
-		config.value = c
-		fields.value = s.fields
-		const present = new Set(Object.values(s.fields).map((f) => f.category ?? 'general'))
-		const known = s.category_order.filter((c) => present.has(c))
-		order.value = [...known, ...[...present].filter((c) => !known.includes(c)).sort()]
-	} catch (e) {
-		error.value = (e as Error).message
-	} finally {
-		loading.value = false
-	}
-}
-onMounted(() => app.dashboard?.ok && load())
 
 const top = [
 	{ id: 'model', label: 'Model' },
@@ -79,9 +74,16 @@ async function save() {
 	saving.value = true
 	try {
 		await dashboard.saveConfig(patch)
-		for (const [k, v] of Object.entries(dirty)) setIn(config.value, k, v)
+		const saved = Object.entries(dirty)
+		res.mutate((d) => {
+			if (!d) return d
+			const next = structuredClone(d.config)
+			for (const [k, v] of saved) setIn(next, k, v)
+			return { ...d, config: next }
+		})
 		discard()
 		toasts.push('Settings saved')
+		load()
 	} catch (e) {
 		toasts.error(`Could not save settings. ${(e as Error).message}`)
 	} finally {
@@ -115,7 +117,7 @@ async function save() {
 				<ul class="hidden space-y-0.5 md:block">
 					<li v-for="(s, i) in sections" :key="s.id" :class="i === top.length && 'mt-3 border-t border-line pt-3'">
 						<button
-							class="w-full rounded-md px-2.5 py-1.5 text-left text-sm hover:bg-surface-2"
+							class="pressable w-full rounded-md px-2.5 py-1.5 text-left text-sm hover:bg-surface-2"
 							:class="section === s.id && !search.trim() ? 'bg-surface-2 font-medium text-ink' : 'text-ink-2'"
 							:aria-current="section === s.id ? 'page' : undefined"
 							@click="go(s.id)"
@@ -144,7 +146,7 @@ async function save() {
 					<p v-if="error" class="text-rose">
 						Could not load settings. {{ error }} <button class="underline" @click="load">Try again</button>
 					</p>
-					<p v-else-if="loading" class="text-ink-2">Loading settings...</p>
+					<Skeleton v-else-if="loading" variant="rows" :count="6" label="Loading settings" />
 					<ConfigSection
 						v-else
 						:fields="fields"
@@ -162,15 +164,17 @@ async function save() {
 			</main>
 		</div>
 
-		<div
-			v-if="count"
-			class="sticky bottom-0 z-10 flex items-center justify-between gap-3 border-t border-line bg-surface px-6 py-3 md:px-10"
-		>
-			<p class="text-sm">{{ count }} unsaved {{ count === 1 ? 'change' : 'changes' }}</p>
-			<div class="flex gap-2">
-				<button class="btn-ghost" :disabled="saving" @click="discard">Discard</button>
-				<button class="btn-primary" :disabled="saving" @click="save">Save changes</button>
+		<Transition name="rise">
+			<div
+				v-if="count"
+				class="sticky bottom-0 z-10 flex items-center justify-between gap-3 border-t border-line bg-surface px-6 py-3 md:px-10"
+			>
+				<p class="text-sm">{{ count }} unsaved {{ count === 1 ? 'change' : 'changes' }}</p>
+				<div class="flex gap-2">
+					<button class="btn-ghost" :disabled="saving" @click="discard">Discard</button>
+					<button class="btn-primary" :disabled="saving" @click="save">Save changes</button>
+				</div>
 			</div>
-		</div>
+		</Transition>
 	</div>
 </template>

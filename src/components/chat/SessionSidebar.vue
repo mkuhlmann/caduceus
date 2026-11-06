@@ -42,6 +42,20 @@ function open(id: string) {
 	emit('navigate')
 }
 
+// Start loading a chat as soon as the pointer rests on it or a finger touches it, so it opens at once.
+let hover: ReturnType<typeof setTimeout> | undefined
+function intent(id: string, now = false) {
+	clearTimeout(hover)
+	if (now) sessions.prefetch(id)
+	else hover = setTimeout(() => sessions.prefetch(id), 90)
+}
+
+function cancelIntent() {
+	clearTimeout(hover)
+}
+
+const skeletonWidths = ['68%', '52%', '76%', '44%', '60%', '72%', '50%', '64%']
+
 function newChat() {
 	router.push('/chat')
 	emit('navigate')
@@ -60,6 +74,15 @@ function newChat() {
 
 		<div class="min-h-0 flex-1 overflow-y-auto px-2 pb-4">
 			<p v-if="sessions.listError" class="px-2 py-3 text-sm text-rose">{{ sessions.listError }}</p>
+			<div
+				v-else-if="!sessions.list.length && sessions.loadingList"
+				class="skeleton mt-3 px-2"
+				role="status"
+				aria-label="Loading chats"
+			>
+				<span class="skeleton-bar mt-1 mb-3 h-2.5 w-14" />
+				<span v-for="w in skeletonWidths" :key="w" class="skeleton-bar my-[1.125rem] h-3" :style="{ width: w }" />
+			</div>
 			<section v-for="g in groups" :key="g.label" class="mt-3">
 				<h2 class="px-2 pb-1 text-xs font-medium text-ink-3">{{ g.label }}</h2>
 				<ul>
@@ -69,6 +92,9 @@ function newChat() {
 							:class="s.id === props.activeId ? 'bg-surface-2' : 'hover:bg-surface-2/60'"
 							:aria-current="s.id === props.activeId ? 'true' : undefined"
 							@click="open(s.id)"
+							@pointerenter="intent(s.id)"
+							@pointerleave="cancelIntent"
+							@pointerdown="intent(s.id, true)"
 						>
 							<span class="flex items-center gap-1.5 pr-6 text-sm text-ink">
 								<span

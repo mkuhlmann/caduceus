@@ -1,15 +1,18 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed, ref } from 'vue'
 import Modal from '@/components/Modal.vue'
+import Skeleton from '@/components/Skeleton.vue'
 import ToggleSwitch from './ToggleSwitch.vue'
 import { dashboard } from '@/lib/dashboard'
+import { useResource } from '@/lib/resource'
 import { useToasts } from '@/stores/toast'
 
 type Env = Awaited<ReturnType<typeof dashboard.env>>
 const toasts = useToasts()
-const env = ref<Env>({})
-const loading = ref(true)
-const error = ref('')
+const res = useResource<Env>('settings:env', () => dashboard.env())
+const env = computed(() => res.data.value ?? {})
+const loading = computed(() => res.pending.value)
+const error = computed(() => (res.data.value ? '' : res.error.value))
 const q = ref('')
 const advanced = ref(false)
 const editing = ref<string | null>(null)
@@ -26,18 +29,10 @@ const NAMES: Record<string, string> = {
 }
 const sentence = (s: string) => s.charAt(0).toUpperCase() + s.slice(1)
 
-async function load() {
-	loading.value = true
-	error.value = ''
-	try {
-		env.value = await dashboard.env()
-	} catch (e) {
-		error.value = (e as Error).message
-	} finally {
-		loading.value = false
-	}
-}
-onMounted(load)
+const load = () => res.reload()
+/** Optimistic: mark a key saved or removed at once; the reload brings the real redacted value. */
+const markSet = (key: string, is_set: boolean) =>
+	res.mutate((e) => (e && e[key] ? { ...e, [key]: { ...e[key], is_set, redacted_value: undefined } } : e))
 
 const groups = computed(() => {
 	const needle = q.value.trim().toLowerCase()
@@ -65,10 +60,12 @@ async function save() {
 	if (!editing.value) return
 	busy.value = true
 	try {
-		await dashboard.setEnv(editing.value, secret.value)
+		const key = editing.value
+		await dashboard.setEnv(key, secret.value)
+		markSet(key, true)
 		toasts.push('Key saved')
 		editing.value = null
-		await load()
+		load()
 	} catch (e) {
 		toasts.error(`Could not save the key. ${(e as Error).message}`)
 	} finally {
@@ -78,11 +75,14 @@ async function save() {
 }
 async function remove(key: string) {
 	if (!confirm(`Remove ${key}? Hermes will stop using it.`)) return
+	const prev = env.value[key]
+	markSet(key, false)
 	try {
 		await dashboard.deleteEnv(key)
 		toasts.push('Key removed')
-		await load()
+		load()
 	} catch (e) {
+		res.mutate((e) => (e && prev ? { ...e, [key]: prev } : e))
 		toasts.error(`Could not remove the key. ${(e as Error).message}`)
 	}
 }
@@ -102,8 +102,8 @@ async function remove(key: string) {
 				><ToggleSwitch v-model="advanced" label="Show advanced" /> Show advanced</label
 			>
 		</div>
-		<p v-if="loading && !Object.keys(env).length" class="text-ink-2">Loading keys...</p>
-		<p v-else-if="error" class="text-rose">Could not load keys. {{ error }}</p>
+		<p v-if="error" class="text-rose">Could not load keys. {{ error }}</p>
+		<Skeleton v-else-if="loading" variant="rows" :count="6" label="Loading keys" />
 		<p v-else-if="!groups.length" class="text-ink-2">No keys match.</p>
 		<details v-for="g in groups" :key="g.id" class="mb-3 border-b border-line pb-2" :open="g.anySet || !!q.trim()">
 			<summary class="cursor-pointer py-2 text-lg font-semibold">

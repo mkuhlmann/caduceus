@@ -1,5 +1,5 @@
 import { defineStore } from 'pinia'
-import { computed, reactive, ref, shallowRef } from 'vue'
+import { computed, reactive, ref, shallowReactive, shallowRef, watch } from 'vue'
 import { gateway, pendingApproval, type ApprovalRequest, type Message, type Session } from '@/lib/gateway'
 import { buildTurns, type AgentTurn, type ApprovalStep, type ToolStep, type Turn } from '@/lib/turns'
 import { useToasts } from './toast'
@@ -26,6 +26,49 @@ const RUNS_MS = 4000
 // Hermes titles a chat instantly from the first message, then upgrades it with a model in the background,
 // often after the run has ended. Look again a few times so the better title shows up.
 const TITLE_CHECKS_MS = [4000, 12000, 30000]
+// Conversations kept in memory so going back to one paints it at once.
+const KEEP_TRANSCRIPTS = 16
+// The newest chats are saved locally so a cold start paints the list before the gateway answers.
+const LIST_KEY = 'caduceus.sessionList'
+const LIST_SAVED = 40
+
+type SavedList = { items: Session[]; hasMore: boolean }
+
+function readSavedList(): SavedList | null {
+	try {
+		const v = JSON.parse(localStorage.getItem(LIST_KEY) ?? 'null')
+		return v && Array.isArray(v.items) ? v : null
+	} catch {
+		return null
+	}
+}
+
+function saveList(items: Session[], hasMore: boolean) {
+	const slim = items.slice(0, LIST_SAVED).map((s) => ({
+		id: s.id,
+		source: s.source,
+		title: s.title,
+		preview: s.preview?.slice(0, 80),
+		started_at: s.started_at,
+		last_active: s.last_active,
+		pinned: s.pinned,
+		archived: s.archived,
+		hidden: s.hidden,
+	}))
+	try {
+		localStorage.setItem(LIST_KEY, JSON.stringify({ items: slim, hasMore: hasMore || items.length > LIST_SAVED }))
+	} catch {
+		// Storage full or blocked: the list just loads from the network next time.
+	}
+}
+
+// Turns are derived from a transcript array that is replaced, never mutated, so they can be cached per array.
+const turnCache = new WeakMap<Message[], Turn[]>()
+function turnsOf(ms: Message[]) {
+	let t = turnCache.get(ms)
+	if (!t) turnCache.set(ms, (t = buildTurns(ms)))
+	return t
+}
 
 function lastOf<T>(xs: T[], ok: (x: T) => unknown) {
 	for (let i = xs.length - 1; i >= 0; i--) if (ok(xs[i]!)) return xs[i]
@@ -74,14 +117,18 @@ export function sourceLabel(s?: string) {
 
 export const useSessions = defineStore('sessions', () => {
 	const toasts = useToasts()
-	const list = ref<Session[]>([])
-	const hasMore = ref(false)
+	const saved = readSavedList()
+	const list = ref<Session[]>(saved?.items ?? [])
+	const hasMore = ref(saved?.hasMore ?? false)
 	const loadingList = ref(false)
 	const listError = ref('')
 	const showScheduled = ref(localStorage.getItem('caduceus.showScheduled') === '1')
 
-	const messages = reactive<Record<string, Message[]>>({})
-	const loadingMessages = ref(false)
+	// Shallow: transcripts are replaced whole, and deep proxies would make every render walk them.
+	const messages = shallowReactive<Record<string, Message[]>>({})
+	const loading = reactive<Record<string, boolean>>({})
+	const inflight = new Map<string, Promise<void>>()
+	const recent: string[] = []
 	const live = reactive<Record<string, Live>>({})
 	const lastError = shallowRef<Record<string, string>>({})
 	const remote = reactive<Record<string, Remote>>({})
@@ -95,14 +142,33 @@ export const useSessions = defineStore('sessions', () => {
 			const merged = more
 				? [...list.value, ...r.data]
 				: [...r.data, ...list.value.filter((x) => !r.data.some((y) => y.id === x.id) && live[x.id])]
-			list.value = merged.filter((s, i) => merged.findIndex((x) => x.id === s.id) === i)
+			const seen = new Set<string>()
+			list.value = merged.filter((s) => !seen.has(s.id) && !!seen.add(s.id))
 			hasMore.value = r.has_more
+			listFresh = true
 		} catch (e) {
 			listError.value = (e as Error).message
 		} finally {
 			loadingList.value = false
 		}
 	}
+
+	let listFresh = false
+	// A list painted from local storage is refreshed once, whichever view asked for the store first.
+	if (saved) void loadList()
+	/** Load the list unless this app session already has a fresh one. */
+	function ensureList() {
+		if (!listFresh && !loadingList.value) void loadList()
+	}
+	let saveTimer: ReturnType<typeof setTimeout> | undefined
+	watch(
+		[list, hasMore],
+		() => {
+			clearTimeout(saveTimer)
+			saveTimer = setTimeout(() => listFresh && saveList(list.value, hasMore.value), 800)
+		},
+		{ deep: true },
+	)
 
 	const visible = computed(() =>
 		list.value.filter((s) => !s.hidden && !s.archived && (showScheduled.value || s.source !== 'cron')),
@@ -117,23 +183,58 @@ export const useSessions = defineStore('sessions', () => {
 		return list.value.find((s) => s.id === id)
 	}
 
-	async function loadMessages(id: string) {
-		loadingMessages.value = true
-		try {
-			messages[id] = await gateway.messages(id)
-			if (!byId(id)) {
-				const s = await gateway.session(id).catch(() => null)
-				if (s && !byId(id)) list.value.unshift(s)
-			}
-		} catch (e) {
-			toasts.error(`Could not load this conversation: ${(e as Error).message}`)
-		} finally {
-			loadingMessages.value = false
+	/** Remember `id` as recently viewed and drop the transcripts of chats not looked at for a while. */
+	function touch(id: string) {
+		const i = recent.indexOf(id)
+		if (i >= 0) recent.splice(i, 1)
+		recent.unshift(id)
+		for (const old of recent.splice(KEEP_TRANSCRIPTS)) {
+			if (live[old] || old === followed) recent.push(old)
+			else delete messages[old]
 		}
 	}
 
+	/** Fetch a transcript; concurrent calls for the same chat share one request. Quiet ones do not toast. */
+	function loadMessages(id: string, quiet = false): Promise<void> {
+		const running = inflight.get(id)
+		if (running) return running
+		loading[id] = true
+		const p = (async () => {
+			try {
+				const ms = await gateway.messages(id)
+				// Keep the same array when nothing changed, so nothing re-renders.
+				if (!sameTranscript(messages[id], ms)) messages[id] = ms
+				touch(id)
+				if (!byId(id)) {
+					const s = await gateway.session(id).catch(() => null)
+					if (s && !byId(id)) list.value.unshift(s)
+				}
+			} catch (e) {
+				if (!quiet) toasts.error(`Could not load this conversation: ${(e as Error).message}`)
+			} finally {
+				delete loading[id]
+				inflight.delete(id)
+			}
+		})()
+		inflight.set(id, p)
+		return p
+	}
+
+	/** Warm the cache for a chat the user is about to open (hover or touch on its row). */
+	function prefetch(id: string) {
+		if (!messages[id] && !live[id]) void loadMessages(id, true)
+	}
+
+	function hasTranscript(id: string) {
+		return !!messages[id]
+	}
+
+	function isLoading(id: string) {
+		return !!loading[id]
+	}
+
 	function turnsFor(id: string): Turn[] {
-		const turns = buildTurns(messages[id] ?? [])
+		const turns = [...turnsOf(messages[id] ?? [])]
 		const l = live[id]
 		if (l) {
 			turns.push({ kind: 'user', key: 'live-user', text: l.user.text, images: l.user.images })
@@ -142,11 +243,14 @@ export const useSessions = defineStore('sessions', () => {
 		}
 		const r = remote[id]
 		if (r) {
-			let turn = turns.at(-1)
-			if (turn?.kind !== 'agent') {
-				turn = { kind: 'agent', key: 'remote-agent', steps: [], reasoning: '' }
-				turns.push(turn)
-			}
+			const last = turns.at(-1)
+			// A copy: the cached turns are shared and must not be marked live.
+			const turn: AgentTurn =
+				last?.kind === 'agent'
+					? { ...last, steps: [...last.steps] }
+					: { kind: 'agent', key: 'remote-agent', steps: [], reasoning: '' }
+			if (last?.kind === 'agent') turns[turns.length - 1] = turn
+			else turns.push(turn)
 			turn.live = true
 			const a = r.approval
 			if (a) {
@@ -185,8 +289,46 @@ export const useSessions = defineStore('sessions', () => {
 		const l: Live = reactive({ turn, user: { text, images }, abort: new AbortController() }) as Live
 		live[id] = l
 
+		// Tokens arrive faster than the screen refreshes. Collect them and apply them once per frame, so a
+		// streaming reply re-renders at most once per frame however fast the model writes.
+		let written = ''
+		let thought = ''
+		let frame = 0
+		const flush = () => {
+			cancelAnimationFrame(frame)
+			frame = 0
+			if (written) {
+				const last = turn.steps.at(-1)
+				if (last?.kind === 'text') last.text += written
+				else {
+					const t = written.replace(/^\s+/, '')
+					if (t) turn.steps.push({ kind: 'text', text: t })
+				}
+				written = ''
+			}
+			if (thought) {
+				turn.reasoning += thought
+				thought = ''
+			}
+		}
+		const later = () => {
+			if (!frame) frame = requestAnimationFrame(flush)
+		}
+
 		try {
 			for await (const ev of gateway.chat(id, payload, { signal: l.abort.signal })) {
+				if (ev.type === 'assistant.delta') {
+					written += ev.delta
+					later()
+					continue
+				}
+				if (ev.type === 'reasoning') {
+					thought += ev.delta
+					later()
+					continue
+				}
+				// Anything else lands after the text before it.
+				flush()
 				switch (ev.type) {
 					case 'run.started':
 						l.runId = ev.run_id
@@ -194,17 +336,8 @@ export const useSessions = defineStore('sessions', () => {
 						// Hermes names the chat from the message as the run starts.
 						setTimeout(() => refreshSession(id, true), 1500)
 						break
-					case 'assistant.delta': {
-						const last = turn.steps.at(-1)
-						if (last?.kind === 'text') last.text += ev.delta
-						else turn.steps.push({ kind: 'text', text: ev.delta.replace(/^\s+/, '') })
-						break
-					}
 					case 'assistant.commentary':
 						turn.steps.push({ kind: 'text', text: ev.text })
-						break
-					case 'reasoning':
-						turn.reasoning += ev.delta
 						break
 					case 'tool.started':
 						turn.steps.push({
@@ -253,7 +386,10 @@ export const useSessions = defineStore('sessions', () => {
 						: err.message
 			}
 		} finally {
+			flush()
 			const failed = turn.error
+			// A load that started before the run ended would miss its last messages.
+			await inflight.get(id)
 			await loadMessages(id)
 			delete live[id]
 			if (failed) lastError.value = { ...lastError.value, [id]: failed }
@@ -445,8 +581,10 @@ export const useSessions = defineStore('sessions', () => {
 		listError,
 		showScheduled,
 		setShowScheduled,
-		messages,
-		loadingMessages,
+		ensureList,
+		prefetch,
+		hasTranscript,
+		isLoading,
 		live,
 		lastError,
 		remote,

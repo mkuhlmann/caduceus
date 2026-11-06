@@ -25,6 +25,15 @@ const project = computed(() =>
 	id.value ? projects.forSession(id.value) : projects.items.find((p) => p.id === route.query.project),
 )
 const turns = computed(() => (id.value ? sessions.turnsFor(id.value) : []))
+// Long chats open with their latest turns; earlier ones are added as the reader scrolls up.
+const PAGE = 30
+const limit = ref(PAGE)
+const shownTurns = computed(() => (turns.value.length > limit.value ? turns.value.slice(-limit.value) : turns.value))
+const earlier = computed(() => turns.value.length - shownTurns.value.length)
+// Turns added to the open chat (a reply, a run elsewhere) extend the window instead of pushing old ones out.
+watch([id, () => turns.value.length], ([v, n], [was, before]) => {
+	if (v === was && before && n > before) limit.value += n - before
+})
 const live = computed(() => (id.value ? sessions.live[id.value] : undefined))
 const remote = computed(() => (id.value && !live.value ? sessions.remote[id.value] : undefined))
 // A run in another tab or device can be stopped and steered from here; one in another channel only watched.
@@ -32,6 +41,11 @@ const running = computed(() => !!live.value || !!remote.value?.runId)
 const liveStatus = computed(
 	() => live.value?.status ?? (remote.value && !remote.value.runId ? 'Working in another channel' : undefined),
 )
+// Turn-shaped placeholders only while a chat that is not in memory yet loads.
+const skeleton = computed(() => !!id.value && !turns.value.length && sessions.isLoading(id.value))
+// Fade the conversation in when it replaces the placeholder; a chat that is already in memory just appears.
+const fadeIn = ref(false)
+watch(skeleton, (v) => v && (fadeIn.value = true))
 const lastError = computed(() => (id.value ? sessions.lastError[id.value] : undefined))
 const foreign = computed(() => session.value?.source && !['api_server'].includes(session.value.source))
 
@@ -44,7 +58,7 @@ const creating = ref(false)
 let stickToBottom = true
 
 onMounted(async () => {
-	if (!sessions.list.length) sessions.loadList()
+	sessions.ensureList()
 	if (!projects.loaded) projects.load().catch(() => {})
 	if (app.dashboard?.ok)
 		dashboard
@@ -57,12 +71,17 @@ watch(
 	id,
 	async (v) => {
 		drawer.value = false
+		fadeIn.value = false
+		limit.value = PAGE
 		sessions.follow(undefined)
-		if (v && !sessions.live[v]) await sessions.loadMessages(v)
-		if (v === id.value) sessions.follow(v)
+		// A chat already in memory shows at once, at its end; a fresh copy loads behind it.
 		stickToBottom = true
 		scrollDown(true)
 		nextTick(() => composer.value?.focus())
+		if (v && !sessions.live[v]) await sessions.loadMessages(v)
+		if (v !== id.value) return
+		sessions.follow(v)
+		scrollDown()
 	},
 	{ immediate: true },
 )
@@ -70,6 +89,7 @@ watch(
 onUnmounted(() => {
 	sessions.follow(undefined)
 	grow.disconnect()
+	nearTop?.disconnect()
 })
 
 // Autoscroll: while the reader is at the bottom, any growth of the conversation (streamed text, tool
@@ -90,6 +110,33 @@ function scrollDown(force = false) {
 	})
 }
 const grow = new ResizeObserver(() => scrollDown())
+
+/** Add earlier turns above, keeping the reader's place. */
+function showEarlier() {
+	const el = scroller.value
+	if (!el || !earlier.value) return
+	const fromBottom = el.scrollHeight - el.scrollTop
+	limit.value += PAGE
+	nextTick(() => {
+		el.scrollTop = el.scrollHeight - fromBottom
+		// Still near the top (a short page of turns): observe again so it keeps filling.
+		if (sentinel.value && nearTop) {
+			nearTop.unobserve(sentinel.value)
+			nearTop.observe(sentinel.value)
+		}
+	})
+}
+const sentinel = ref<HTMLElement>()
+let nearTop: IntersectionObserver | undefined
+watch(sentinel, (el, old) => {
+	if (!nearTop && scroller.value)
+		nearTop = new IntersectionObserver((es) => es.some((e) => e.isIntersecting) && showEarlier(), {
+			root: scroller.value,
+			rootMargin: '800px 0px 0px 0px',
+		})
+	if (old) nearTop?.unobserve(old)
+	if (el) nearTop?.observe(el)
+})
 onMounted(() => scroller.value && grow.observe(scroller.value))
 watch(content, (el, old) => {
 	if (old) grow.unobserve(old)
@@ -138,14 +185,16 @@ const greeting = computed(() => (project.value ? `New chat in ${project.value.na
 		<div class="hidden md:block">
 			<SessionSidebar :active-id="id" />
 		</div>
-		<div v-if="drawer" class="fixed inset-0 z-40 md:hidden">
-			<div class="absolute inset-0 bg-black/40" @click="drawer = false" />
-			<div
-				class="absolute inset-y-0 left-0 w-[85%] max-w-xs bg-surface pt-[env(safe-area-inset-top)] pb-[env(safe-area-inset-bottom)] shadow-2xl"
-			>
-				<SessionSidebar :active-id="id" @navigate="drawer = false" />
+		<Transition name="drawer">
+			<div v-if="drawer" class="fixed inset-0 z-40 md:hidden">
+				<div class="absolute inset-0 bg-black/40" @click="drawer = false" />
+				<div
+					class="drawer-panel absolute inset-y-0 left-0 w-[85%] max-w-xs bg-surface pt-[env(safe-area-inset-top)] pb-[env(safe-area-inset-bottom)] shadow-2xl"
+				>
+					<SessionSidebar :active-id="id" @navigate="drawer = false" />
+				</div>
 			</div>
-		</div>
+		</Transition>
 
 		<section class="flex min-w-0 flex-1 flex-col">
 			<header class="flex h-14 shrink-0 items-center gap-2 border-b border-line px-3 md:px-6">
@@ -180,30 +229,52 @@ const greeting = computed(() => (project.value ? `New chat in ${project.value.na
 					</p>
 				</div>
 				<div v-else ref="content" class="mx-auto max-w-4xl px-4 py-6 md:px-8">
-					<p v-if="sessions.loadingMessages && !turns.length" class="text-sm text-ink-3">Loading conversation</p>
-					<p v-else-if="!turns.length" class="text-sm text-ink-3">No messages yet.</p>
-					<template v-for="t in turns" :key="t.key">
-						<div v-if="t.kind === 'user'" class="my-6 flex justify-end">
-							<div class="max-w-[85%] rounded-2xl rounded-br-md bg-surface-2 px-4 py-2.5">
-								<div v-if="t.images.length" class="mb-2 flex flex-wrap gap-2">
-									<img
-										v-for="(src, i) in t.images"
-										:key="i"
-										:src="src"
-										alt="Attached image"
-										class="max-h-48 rounded-md"
-									/>
-								</div>
-								<p class="whitespace-pre-wrap">{{ t.text }}</p>
+					<div v-if="skeleton" class="skeleton" role="status" aria-label="Loading conversation">
+						<template v-for="i in 2" :key="i">
+							<div class="my-6 flex justify-end">
+								<span class="skeleton-bar h-10 rounded-2xl rounded-br-md" :style="{ width: i === 1 ? '46%' : '32%' }" />
 							</div>
-						</div>
-						<AgentTurnView
-							v-else
-							:turn="t"
-							:status="t.live ? liveStatus : undefined"
-							@approve="(c) => id && sessions.answerApproval(id, c)"
-						/>
-					</template>
+							<div class="flex max-w-[72ch] flex-col gap-2.5">
+								<span class="skeleton-bar mb-1.5 h-3 w-36" />
+								<span class="skeleton-bar h-3 w-[92%]" />
+								<span class="skeleton-bar h-3 w-[84%]" />
+								<span class="skeleton-bar h-3 w-[88%]" />
+								<span class="skeleton-bar h-3" :style="{ width: i === 1 ? '40%' : '62%' }" />
+							</div>
+						</template>
+					</div>
+					<p v-else-if="!turns.length" class="text-sm text-ink-3">No messages yet. Write the first one below.</p>
+					<div v-else :class="{ 'turns-fade': fadeIn }">
+						<button v-if="earlier" ref="sentinel" class="btn-ghost mx-auto mb-2 flex" @click="showEarlier">
+							Show earlier messages
+						</button>
+						<template v-for="t in shownTurns" :key="t.key">
+							<div
+								v-if="t.kind === 'user'"
+								class="my-6 flex justify-end"
+								:class="{ 'turn-sent': t.key === 'live-user' }"
+							>
+								<div class="max-w-[85%] rounded-2xl rounded-br-md bg-surface-2 px-4 py-2.5">
+									<div v-if="t.images.length" class="mb-2 flex flex-wrap gap-2">
+										<img
+											v-for="(src, i) in t.images"
+											:key="i"
+											:src="src"
+											alt="Attached image"
+											class="max-h-48 rounded-md"
+										/>
+									</div>
+									<p class="whitespace-pre-wrap">{{ t.text }}</p>
+								</div>
+							</div>
+							<AgentTurnView
+								v-else
+								:turn="t"
+								:status="t.live ? liveStatus : undefined"
+								@approve="(c) => id && sessions.answerApproval(id, c)"
+							/>
+						</template>
+					</div>
 					<p v-if="lastError && !live" class="mt-3 max-w-[72ch] rounded-md bg-rose-soft px-3 py-2 text-sm">
 						{{ lastError }}
 					</p>
@@ -235,3 +306,24 @@ const greeting = computed(() => (project.value ? `New chat in ${project.value.na
 		</section>
 	</div>
 </template>
+
+<style scoped>
+/* A message the user just sent rises into place; nothing else in the list moves. */
+.turn-sent {
+	animation: turn-sent var(--dur) var(--ease-out);
+}
+@keyframes turn-sent {
+	from {
+		opacity: 0;
+		transform: translateY(8px);
+	}
+}
+.turns-fade {
+	animation: turns-fade var(--dur) var(--ease-out);
+}
+@keyframes turns-fade {
+	from {
+		opacity: 0;
+	}
+}
+</style>

@@ -41,15 +41,17 @@ const output = computed(() => {
 			}}</span>
 			<span class="min-w-0 truncate text-ink-3">{{ summary }}</span>
 		</button>
-		<div v-if="open" class="mt-1 mb-2 space-y-2">
-			<pre
-				v-if="step.args && Object.keys(step.args).length"
-				class="max-h-48 overflow-auto rounded-md bg-surface-2 px-3 py-2 font-mono text-xs leading-relaxed whitespace-pre-wrap text-ink-2"
-				>{{ JSON.stringify(step.args, null, 2) }}</pre>
-			<pre
-				v-if="output"
-				class="max-h-80 overflow-auto rounded-md border border-line px-3 py-2 font-mono text-xs leading-relaxed whitespace-pre-wrap text-ink-2"
-				>{{ output.length > 20000 ? output.slice(0, 20000) + '\n…' : output }}</pre>
-		</div>
+		<Transition enter-from-class="rise-enter-from" enter-active-class="rise-enter-active">
+			<div v-if="open" class="mt-1 mb-2 space-y-2">
+				<pre
+					v-if="step.args && Object.keys(step.args).length"
+					class="max-h-48 overflow-auto rounded-md bg-surface-2 px-3 py-2 font-mono text-xs leading-relaxed whitespace-pre-wrap text-ink-2"
+					>{{ JSON.stringify(step.args, null, 2) }}</pre>
+				<pre
+					v-if="output"
+					class="max-h-80 overflow-auto rounded-md border border-line px-3 py-2 font-mono text-xs leading-relaxed whitespace-pre-wrap text-ink-2"
+					>{{ output.length > 20000 ? output.slice(0, 20000) + '\n…' : output }}</pre>
+			</div>
+		</Transition>
 	</li>
 </template>

@@ -52,7 +52,7 @@ const healthy = computed(() => app.gateway?.ok && (app.dashboard?.ok ?? true))
 			v-for="item in items"
 			:key="item.to"
 			:to="item.to"
-			class="group flex min-w-0 flex-1 flex-col items-center gap-0.5 rounded-lg px-1 py-2 text-[0.6875rem] font-medium transition-colors md:w-[64px] md:flex-none md:px-1.5 md:py-1.5"
+			class="group flex min-w-0 flex-1 flex-col items-center gap-0.5 pressable rounded-lg px-1 py-2 text-[0.6875rem] font-medium md:w-[64px] md:flex-none md:px-1.5 md:py-1.5"
 			:class="route.name === item.match ? 'bg-surface-2 text-ink' : 'text-ink-3 hover:text-ink'"
 			:aria-current="route.name === item.match ? 'page' : undefined"
 			:title="item.label"

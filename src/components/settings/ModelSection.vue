@@ -1,15 +1,21 @@
 <script setup lang="ts">
-import { computed, onMounted, ref, watch } from 'vue'
+import { computed, ref, watch } from 'vue'
+import Skeleton from '@/components/Skeleton.vue'
 import { DASH, post } from '@/lib/http'
 import { dashboard } from '@/lib/dashboard'
+import { useResource } from '@/lib/resource'
 import { useToasts } from '@/stores/toast'
 
 const toasts = useToasts()
-const loading = ref(true)
-const error = ref('')
 const busy = ref(false)
-const options = ref<Awaited<ReturnType<typeof dashboard.modelOptions>> | null>(null)
-const info = ref<any>(null)
+const res = useResource('settings:model', async () => {
+	const [options, info] = await Promise.all([dashboard.modelOptions(), dashboard.modelInfo()])
+	return { options, info: info as any }
+})
+const loading = computed(() => res.pending.value)
+const error = computed(() => (res.data.value ? '' : res.error.value))
+const options = computed(() => res.data.value?.options ?? null)
+const info = computed(() => res.data.value?.info ?? null)
 const provider = ref('')
 const model = ref('')
 
@@ -24,20 +30,20 @@ const models = computed(() => {
 const providerName = (slug: string) => options.value?.providers.find((p) => p.slug === slug)?.name ?? slug
 const unchanged = computed(() => provider.value === current.value.provider && model.value === current.value.model)
 
-async function load() {
-	loading.value = true
-	error.value = ''
-	try {
-		;[options.value, info.value] = await Promise.all([dashboard.modelOptions(), dashboard.modelInfo()])
-		provider.value = current.value.provider
-		model.value = current.value.model
-	} catch (e) {
-		error.value = (e as Error).message
-	} finally {
-		loading.value = false
-	}
-}
-onMounted(load)
+// Show the current model in the pickers, unless a background refresh lands after the user picked another one.
+let shown = { provider: '', model: '' }
+watch(
+	current,
+	(c) => {
+		if (provider.value === shown.provider && model.value === shown.model) {
+			provider.value = c.provider
+			model.value = c.model
+		}
+		shown = { ...c }
+	},
+	{ immediate: true },
+)
+const load = () => res.reload()
 watch(provider, (p, old) => {
 	if (old && p !== current.value.provider)
 		model.value = options.value?.providers.find((x) => x.slug === p)?.models[0] ?? ''
@@ -73,8 +79,8 @@ const ctx = (n?: number) => (n ? `${n.toLocaleString()} tokens` : 'unknown')
 </script>
 
 <template>
-	<p v-if="loading" class="text-ink-2">Loading model...</p>
-	<p v-else-if="error" class="text-rose">Could not load model options. {{ error }}</p>
+	<p v-if="error" class="text-rose">Could not load model options. {{ error }}</p>
+	<Skeleton v-else-if="loading" variant="lines" :count="5" label="Loading model" class="max-w-xl" />
 	<div v-else class="max-w-xl space-y-6">
 		<div>
 			<p class="text-sm text-ink-2">Current model</p>

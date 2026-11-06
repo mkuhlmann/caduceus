@@ -1,12 +1,14 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { Search } from 'lucide-vue-next'
 import PageHeader from '@/components/PageHeader.vue'
 import EmptyState from '@/components/EmptyState.vue'
+import Skeleton from '@/components/Skeleton.vue'
 import HistoryRow, { type HistoryItem } from '@/components/history/HistoryRow.vue'
 import { dashboard } from '@/lib/dashboard'
 import { gateway } from '@/lib/gateway'
+import { invalidateResource, useResource } from '@/lib/resource'
 import { useApp } from '@/stores/app'
 import { useSessions, sourceLabel } from '@/stores/sessions'
 import { useToasts } from '@/stores/toast'
@@ -17,20 +19,86 @@ const app = useApp()
 const sessions = useSessions()
 const toasts = useToasts()
 
+type Page = { items: HistoryItem[]; total: number | null; hasMore: boolean }
+type Stats = { total: number; messages: number; by_source: Record<string, number> }
+
 const query = ref('')
 const source = ref('')
 const archived = ref<'exclude' | 'include' | 'only'>('exclude')
-const items = ref<HistoryItem[]>([])
-const total = ref<number | null>(null)
-const hasMore = ref(false)
-const loading = ref(false)
 const loadingMore = ref(false)
-const error = ref('')
+const moreError = ref('')
 const busyId = ref('')
-const stats = ref<{ total: number; messages: number; by_source: Record<string, number> } | null>(null)
 
-const searching = computed(() => query.value.trim().length > 0)
+// The search runs 250ms after the last keystroke; until then the current results stay on screen.
+const settledQuery = ref('')
+let timer: ReturnType<typeof setTimeout> | undefined
+watch(query, (q) => {
+	clearTimeout(timer)
+	timer = setTimeout(() => (settledQuery.value = q.trim()), 250)
+})
+onBeforeUnmount(() => clearTimeout(timer))
+
+const searching = computed(() => settledQuery.value.length > 0)
 const useDash = computed(() => app.hasDashboard())
+
+// Each filter combination is cached, so going back to History, or back to a filter, paints at once.
+const key = computed(
+	() => `history:${useDash.value ? 'dash' : 'gw'}:${archived.value}:${source.value}:${settledQuery.value}`,
+)
+const { data: page, error, pending, refreshing, reload, mutate } = useResource<Page>(key, () => fetchPage(0))
+// A background refresh returns fresh objects for the same chats. Rows whose data did not change keep their old
+// object, so Vue skips re-rendering them.
+let known = new Map<string, HistoryItem>()
+const items = computed(() => {
+	const next = (page.value?.items ?? []).map((it) => {
+		const old = known.get(it.id)
+		return old && sameItem(old, it) ? old : it
+	})
+	known = new Map(next.map((it) => [it.id, it]))
+	return next
+})
+function sameItem(a: HistoryItem, b: HistoryItem) {
+	const ka = Object.keys(a) as (keyof HistoryItem)[]
+	return ka.length === Object.keys(b).length && ka.every((k) => a[k] === b[k])
+}
+
+// Mounting all rows at once blocks a phone for a few frames. The first screenful renders with the page, the rest
+// follows in small batches over the next frames, below the fold.
+const FIRST = 12
+const BATCH = 8
+const limit = ref(FIRST)
+let frame = 0
+function growRows() {
+	cancelAnimationFrame(frame)
+	if (limit.value >= items.value.length) return
+	frame = requestAnimationFrame(() => {
+		limit.value += BATCH
+		growRows()
+	})
+}
+watch(() => items.value.length, growRows, { immediate: true })
+// New results for another search or filter replace most rows, so they mount in batches too.
+watch(pending, (now, before) => {
+	if (before && !now) {
+		limit.value = FIRST
+		growRows()
+	}
+})
+onBeforeUnmount(() => cancelAnimationFrame(frame))
+const shownItems = computed(() => (limit.value >= items.value.length ? items.value : items.value.slice(0, limit.value)))
+const total = computed(() => page.value?.total ?? null)
+const hasMore = computed(() => !!page.value?.hasMore)
+// Results from the previous filter stay visible, dimmed, while the new ones load.
+const stale = computed(() => pending.value && !!page.value)
+
+const {
+	data: stats,
+	pending: statsPending,
+	mutate: mutateStats,
+} = useResource<Stats>(
+	() => (useDash.value ? 'history:stats' : null),
+	() => dashboard.sessionStats() as Promise<Stats>,
+)
 
 const statsLine = computed(() => {
 	const s = stats.value
@@ -45,8 +113,6 @@ const sources = computed(() =>
 		.sort((a, b) => b[1] - a[1])
 		.map(([key, n]) => ({ key, n, label: sourceLabel(key) })),
 )
-
-let token = 0
 
 function fromSession(s: any): HistoryItem {
 	return {
@@ -68,107 +134,112 @@ function archivedOk(a: boolean | undefined) {
 	return true
 }
 
-async function run(more = false) {
-	const my = ++token
-	error.value = ''
-	if (more) loadingMore.value = true
-	else loading.value = true
+async function fetchPage(offset: number): Promise<Page> {
+	const q = settledQuery.value
+	if (useDash.value && q) {
+		const hits = await dashboard.search(q, 60)
+		const seen = new Set<string>()
+		const out: HistoryItem[] = []
+		for (const h of hits) {
+			const id = h.session_id
+			if (seen.has(id)) continue
+			seen.add(id)
+			const item = { ...fromSession({ ...h, id }), snippet: h.snippet }
+			if (source.value && item.source !== source.value) continue
+			if (!archivedOk(item.archived)) continue
+			out.push(item)
+		}
+		return { items: out, total: out.length, hasMore: false }
+	}
+	if (useDash.value) {
+		const r = await dashboard.sessions({
+			order: 'recent',
+			limit: PAGE,
+			offset,
+			archived: archived.value,
+			...(source.value ? { source: source.value } : {}),
+		})
+		const rows = r.sessions.map(fromSession)
+		return { items: rows, total: r.total, hasMore: offset + rows.length < r.total }
+	}
+	const r = await gateway.sessions({
+		limit: q ? 200 : PAGE,
+		offset,
+		...(source.value ? { source: source.value } : {}),
+	})
+	const needle = q.toLowerCase()
+	const rows = r.data
+		.filter((s) => !s.hidden && archivedOk(s.archived))
+		.filter((s) => !needle || (s.title ?? '').toLowerCase().includes(needle))
+		.map(fromSession)
+	return { items: rows, total: null, hasMore: !q && r.has_more }
+}
+
+async function loadMore() {
+	const k = key.value
+	loadingMore.value = true
+	moreError.value = ''
 	try {
-		const q = query.value.trim()
-		if (useDash.value && q) {
-			const hits = await dashboard.search(q, 60)
-			const seen = new Set<string>()
-			const out: HistoryItem[] = []
-			for (const h of hits) {
-				const id = h.session_id
-				if (seen.has(id)) continue
-				seen.add(id)
-				const item = { ...fromSession({ ...h, id }), snippet: h.snippet }
-				if (source.value && item.source !== source.value) continue
-				if (!archivedOk(item.archived)) continue
-				out.push(item)
-			}
-			if (my !== token) return
-			items.value = out
-			total.value = out.length
-			hasMore.value = false
-		} else if (useDash.value) {
-			const offset = more ? items.value.length : 0
-			const r = await dashboard.sessions({
-				order: 'recent',
-				limit: PAGE,
-				offset,
-				archived: archived.value,
-				...(source.value ? { source: source.value } : {}),
-			})
-			if (my !== token) return
-			const rows = r.sessions.map(fromSession)
-			items.value = more ? [...items.value, ...rows] : rows
-			total.value = r.total
-			hasMore.value = items.value.length < r.total
-		} else {
-			const offset = more ? items.value.length : 0
-			const r = await gateway.sessions({
-				limit: q ? 200 : PAGE,
-				offset,
-				...(source.value ? { source: source.value } : {}),
-			})
-			if (my !== token) return
-			const needle = q.toLowerCase()
-			const rows = r.data
-				.filter((s) => !s.hidden && archivedOk(s.archived))
-				.filter((s) => !needle || (s.title ?? '').toLowerCase().includes(needle))
-				.map(fromSession)
-			items.value = more ? [...items.value, ...rows] : rows
-			total.value = null
-			hasMore.value = !q && r.has_more
-		}
+		const next = await fetchPage(items.value.length)
+		if (k !== key.value) return
+		mutate((cur) => ({
+			items: [...(cur?.items ?? []), ...next.items.filter((n) => !cur?.items.some((c) => c.id === n.id))],
+			total: next.total,
+			hasMore: next.hasMore,
+		}))
 	} catch (e) {
-		if (my !== token) return
-		error.value = (e as Error).message
+		moreError.value = (e as Error).message
 	} finally {
-		if (my === token) {
-			loading.value = false
-			loadingMore.value = false
-		}
+		loadingMore.value = false
 	}
 }
 
-let timer: ReturnType<typeof setTimeout> | undefined
-watch(query, () => {
-	clearTimeout(timer)
-	timer = setTimeout(() => run(), 250)
-})
-watch([source, archived], () => run())
-onBeforeUnmount(() => clearTimeout(timer))
+// Rows only animate out right after the user archives or deletes one, never on the first paint or a filter.
+const animate = ref(false)
+let animateTimer: ReturnType<typeof setTimeout> | undefined
+function animateNext() {
+	animate.value = true
+	clearTimeout(animateTimer)
+	animateTimer = setTimeout(() => (animate.value = false), 600)
+}
+onBeforeUnmount(() => clearTimeout(animateTimer))
 
-onMounted(async () => {
-	run()
-	if (useDash.value) {
-		try {
-			stats.value = (await dashboard.sessionStats()) as any
-		} catch {
-			/* the stats line is optional */
+/** Changes the visible list at once; `null` drops the chat from it. */
+function patchItem(id: string, change: Partial<HistoryItem> | null) {
+	mutate((cur) => {
+		if (!cur) return cur
+		const dropped = change === null && cur.items.some((x) => x.id === id)
+		return {
+			...cur,
+			items:
+				change === null
+					? cur.items.filter((x) => x.id !== id)
+					: cur.items.map((x) => (x.id === id ? { ...x, ...change } : x)),
+			total: cur.total != null && dropped ? cur.total - 1 : cur.total,
 		}
-	}
-})
+	})
+}
 
 function open(id: string) {
 	router.push(`/chat/${encodeURIComponent(id)}`)
 }
 
 async function toggleArchive(it: HistoryItem) {
+	const next = !it.archived
 	busyId.value = it.id
+	animateNext()
+	// Other filters list this chat differently now; they reload on their next visit.
+	invalidateResource('history:dash:')
+	invalidateResource('history:gw:')
+	patchItem(it.id, archivedOk(next) ? { archived: next } : null)
 	try {
-		const next = !it.archived
 		await gateway.updateSession(it.id, { archived: next })
 		toasts.push(next ? 'Chat archived' : 'Chat restored')
 		const local = sessions.byId(it.id)
 		if (local) local.archived = next
-		if (archivedOk(next)) it.archived = next
-		else items.value = items.value.filter((x) => x.id !== it.id)
 	} catch (e) {
 		toasts.error(`Could not ${it.archived ? 'restore' : 'archive'} this chat: ${(e as Error).message}`)
+		reload()
 	} finally {
 		busyId.value = ''
 	}
@@ -178,11 +249,13 @@ async function remove(it: HistoryItem) {
 	const name = it.title || it.preview?.trim() || 'Untitled'
 	if (!confirm(`Delete "${name}"? The whole conversation is removed from Hermes and cannot be recovered.`)) return
 	busyId.value = it.id
+	animateNext()
+	invalidateResource('history:dash:')
+	invalidateResource('history:gw:')
+	patchItem(it.id, null)
 	try {
 		await sessions.remove(it.id)
-		items.value = items.value.filter((x) => x.id !== it.id)
-		if (total.value != null) total.value--
-		if (stats.value) stats.value.total--
+		mutateStats((s) => (s ? { ...s, total: s.total - 1 } : s))
 		toasts.push('Chat deleted')
 	} catch (e) {
 		const err = e as Error & { status?: number }
@@ -191,6 +264,7 @@ async function remove(it: HistoryItem) {
 				? 'This chat is working right now. Stop the run in the chat, then delete it.'
 				: `Could not delete this chat: ${err.message}`,
 		)
+		reload()
 	} finally {
 		busyId.value = ''
 	}
@@ -217,7 +291,7 @@ async function remove(it: HistoryItem) {
 				<div class="flex flex-wrap items-center gap-x-4 gap-y-2">
 					<div v-if="sources.length" class="flex flex-wrap gap-1.5" role="group" aria-label="Filter by channel">
 						<button
-							class="rounded-full border px-2.5 py-0.5 text-sm transition-colors"
+							class="pressable rounded-full border px-2.5 py-0.5 text-sm"
 							:class="source === '' ? 'border-ink bg-ink text-bg' : 'border-line text-ink-2 hover:bg-surface-2'"
 							:aria-pressed="source === ''"
 							@click="source = ''"
@@ -227,13 +301,22 @@ async function remove(it: HistoryItem) {
 						<button
 							v-for="s in sources"
 							:key="s.key"
-							class="rounded-full border px-2.5 py-0.5 text-sm transition-colors"
+							class="pressable rounded-full border px-2.5 py-0.5 text-sm"
 							:class="source === s.key ? 'border-ink bg-ink text-bg' : 'border-line text-ink-2 hover:bg-surface-2'"
 							:aria-pressed="source === s.key"
 							@click="source = source === s.key ? '' : s.key"
 						>
 							{{ s.label }} {{ s.n.toLocaleString() }}
 						</button>
+					</div>
+					<!-- Holds the place of the channel filters on a first visit, so the list does not jump down. -->
+					<div v-else-if="statsPending" class="skeleton flex flex-wrap gap-1.5" aria-hidden="true">
+						<span
+							v-for="w in [40, 88, 72, 80]"
+							:key="w"
+							class="skeleton-bar h-6.5"
+							:style="{ width: `${w}px`, borderRadius: '999px' }"
+						/>
 					</div>
 					<div class="ml-auto flex items-center gap-2">
 						<label for="archived" class="text-sm text-ink-2">Archived chats</label>
@@ -250,10 +333,10 @@ async function remove(it: HistoryItem) {
 				Could not load conversations: {{ error }}. Check the connection in Settings and try again.
 			</p>
 
-			<p v-if="loading && !items.length" class="mt-6 text-ink-3" role="status">Loading conversations</p>
+			<Skeleton v-if="pending && !items.length" class="mt-3" :count="8" label="Loading conversations" />
 
 			<EmptyState
-				v-else-if="!items.length && !error"
+				v-else-if="!items.length && !error && !stale"
 				:title="searching ? 'No matches' : 'No conversations here yet'"
 				:body="
 					searching ? 'Try different words, or clear the channel filter.' : 'Start a chat and it will show up here.'
@@ -263,22 +346,38 @@ async function remove(it: HistoryItem) {
 			</EmptyState>
 
 			<template v-else-if="items.length">
-				<p v-if="searching && !loading" class="mt-5 text-sm text-ink-3">
+				<p v-if="searching" class="mt-5 text-sm text-ink-3" :class="{ invisible: stale }">
 					{{ items.length }} {{ items.length === 1 ? 'conversation matches' : 'conversations match' }}
 				</p>
-				<ul class="mt-3 max-w-3xl divide-y divide-line border-y border-line" :class="{ 'opacity-60': loading }">
-					<HistoryRow
-						v-for="it in items"
-						:key="it.id"
-						:item="it"
-						:busy="busyId === it.id"
-						@open="open(it.id)"
-						@archive="toggleArchive(it)"
-						@remove="remove(it)"
-					/>
-				</ul>
+				<div class="relative mt-3 max-w-3xl">
+					<div v-if="pending || refreshing" class="absolute inset-x-0 -top-px z-10" aria-hidden="true">
+						<div class="refresh-bar" />
+					</div>
+					<p v-if="stale" class="sr-only" role="status">Loading conversations</p>
+					<TransitionGroup
+						tag="ul"
+						class="relative divide-y divide-line border-y border-line transition-opacity duration-(--dur)"
+						:class="{ 'opacity-60': stale }"
+						:aria-busy="stale"
+						:name="animate ? 'rise' : 'none'"
+						:leave-active-class="animate ? 'rise-leave-active absolute inset-x-0' : undefined"
+					>
+						<HistoryRow
+							v-for="it in shownItems"
+							:key="it.id"
+							:item="it"
+							:busy="busyId === it.id"
+							@open="open(it.id)"
+							@archive="toggleArchive(it)"
+							@remove="remove(it)"
+						/>
+					</TransitionGroup>
+				</div>
+				<p v-if="moreError" class="mt-4 max-w-3xl text-sm text-rose" role="alert">
+					Could not load more conversations: {{ moreError }}. Check the connection in Settings and try again.
+				</p>
 				<div v-if="hasMore" class="mt-4 flex max-w-3xl items-center gap-3">
-					<button class="btn-outline" :disabled="loadingMore" @click="run(true)">
+					<button class="btn-outline" :disabled="loadingMore || stale" @click="loadMore">
 						{{ loadingMore ? 'Loading' : 'Load more' }}
 					</button>
 					<span v-if="total != null" class="text-sm text-ink-3">Showing {{ items.length }} of {{ total }}</span>

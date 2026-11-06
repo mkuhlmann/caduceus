@@ -131,8 +131,176 @@ h3 {
 	}
 }
 
+/*
+  Motion. Short, decelerating and only on transform and opacity, so it stays on the compositor and holds
+  120Hz. Everything here answers something the user did: opening a page, a dialog, a drawer, a press.
+  Use the Vue <Transition name> classes below rather than ad-hoc durations.
+*/
+:root {
+	--ease-out: cubic-bezier(0.22, 1, 0.36, 1);
+	--ease-in-out: cubic-bezier(0.65, 0, 0.35, 1);
+	--dur-fast: 120ms;
+	--dur: 180ms;
+	--dur-slow: 260ms;
+	-webkit-tap-highlight-color: transparent;
+}
+
+html {
+	/* No double-tap zoom delay; the app handles its own pinch-free layout. */
+	touch-action: manipulation;
+	overscroll-behavior-y: none;
+}
+
+/* Page enter: a short rise. No leave transition, so the old page is gone at once and nothing overlaps. */
+.page-enter-active {
+	transition:
+		opacity var(--dur) var(--ease-out),
+		transform var(--dur) var(--ease-out);
+}
+.page-enter-from {
+	opacity: 0;
+	transform: translateY(6px);
+}
+
+/* Fade: content replacing a skeleton, banners, small panels. */
+.fade-enter-active,
+.fade-leave-active {
+	transition: opacity var(--dur) var(--ease-out);
+}
+.fade-enter-from,
+.fade-leave-to {
+	opacity: 0;
+}
+
+/* Rise: list items, toasts, expanding detail rows. */
+.rise-enter-active,
+.rise-leave-active,
+.rise-move {
+	transition:
+		opacity var(--dur) var(--ease-out),
+		transform var(--dur) var(--ease-out);
+}
+.rise-enter-from,
+.rise-leave-to {
+	opacity: 0;
+	transform: translateY(6px);
+}
+.rise-leave-active {
+	transition-duration: var(--dur-fast);
+}
+
+/* Drawer from the left (mobile chat list) with its scrim. */
+.drawer-enter-active,
+.drawer-leave-active {
+	transition: opacity var(--dur-slow) var(--ease-out);
+}
+.drawer-enter-active .drawer-panel,
+.drawer-leave-active .drawer-panel {
+	transition: transform var(--dur-slow) var(--ease-out);
+}
+.drawer-leave-active,
+.drawer-leave-active .drawer-panel {
+	transition-duration: var(--dur);
+	transition-timing-function: var(--ease-in-out);
+}
+.drawer-enter-from,
+.drawer-leave-to {
+	opacity: 0;
+}
+.drawer-enter-from .drawer-panel,
+.drawer-leave-to .drawer-panel {
+	transform: translateX(-100%);
+}
+
+/* Dialogs (Modal.vue) open with a small scale-up; the backdrop fades. */
+dialog.modal[open] {
+	transition:
+		opacity var(--dur) var(--ease-out),
+		transform var(--dur) var(--ease-out);
+	@starting-style {
+		opacity: 0;
+		transform: translateY(8px) scale(0.98);
+	}
+}
+dialog.modal[open]::backdrop {
+	transition: opacity var(--dur) var(--ease-out);
+	@starting-style {
+		opacity: 0;
+	}
+}
+
+/* Skeleton (Skeleton.vue): hidden for 150ms so quick loads never flash, then a slow sheen. */
+.skeleton {
+	animation: skeleton-in var(--dur) var(--ease-out) 150ms both;
+}
+/* In the components layer so `rounded-*` utilities on a bar win over the default radius. */
+@layer components {
+	.skeleton-bar {
+		position: relative;
+		display: block;
+		overflow: hidden;
+		border-radius: 4px;
+		background: var(--surface-2);
+	}
+}
+.skeleton-bar::after {
+	content: '';
+	position: absolute;
+	inset: 0;
+	transform: translateX(-100%);
+	background: linear-gradient(90deg, transparent, var(--surface-3), transparent);
+	animation: skeleton-sheen 1.4s var(--ease-in-out) 150ms infinite;
+}
+@keyframes skeleton-in {
+	from {
+		opacity: 0;
+	}
+}
+@keyframes skeleton-sheen {
+	to {
+		transform: translateX(100%);
+	}
+}
+
+/* Thin progress line for background refreshes over data already on screen. Neutral, never gold. */
+.refresh-bar {
+	position: relative;
+	height: 2px;
+	overflow: hidden;
+	/* Same 150ms grace as the skeleton, so quick refreshes never show it. */
+	animation: skeleton-in var(--dur) var(--ease-out) 150ms both;
+}
+.refresh-bar::after {
+	content: '';
+	position: absolute;
+	inset: 0;
+	width: 40%;
+	background: var(--ink-3);
+	opacity: 0.5;
+	border-radius: 2px;
+	animation: refresh-slide 1s var(--ease-in-out) infinite;
+}
+@keyframes refresh-slide {
+	from {
+		transform: translateX(-100%);
+	}
+	to {
+		transform: translateX(250%);
+	}
+}
+
+/* Press feedback: the same small give on every tappable control. */
+@utility pressable {
+	transition-property: color, background-color, border-color, opacity, transform;
+	transition-duration: var(--dur-fast);
+	transition-timing-function: var(--ease-out);
+	&:active:not(:disabled) {
+		transform: scale(0.97);
+	}
+}
+
 @utility btn {
-	@apply inline-flex items-center justify-center gap-1.5 rounded-md px-3 h-8 text-sm font-medium transition-colors disabled:opacity-50 disabled:pointer-events-none;
+	@apply pressable inline-flex items-center justify-center gap-1.5 rounded-md px-3 h-8 text-sm font-medium disabled:opacity-50 disabled:pointer-events-none;
 }
 @utility btn-primary {
 	@apply btn bg-ink text-bg hover:bg-ink-2;
@@ -147,7 +315,7 @@ h3 {
 	@apply btn text-rose hover:bg-rose-soft;
 }
 @utility icon-btn {
-	@apply inline-flex items-center justify-center rounded-md size-8 text-ink-2 hover:bg-surface-2 hover:text-ink transition-colors disabled:opacity-40;
+	@apply pressable inline-flex items-center justify-center rounded-md size-8 text-ink-2 hover:bg-surface-2 hover:text-ink disabled:opacity-40;
 }
 @utility field {
 	@apply w-full rounded-md border border-line bg-surface px-2.5 h-9 text-sm text-ink placeholder:text-ink-3 focus:border-focus focus:outline-none;

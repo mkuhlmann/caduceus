@@ -1,33 +1,40 @@
 <script setup lang="ts">
-import { onMounted, ref, watch } from 'vue'
+import { onBeforeUnmount, ref } from 'vue'
 import { Copy, Plus, Trash2 } from 'lucide-vue-next'
 import { dashboard, type Webhook } from '@/lib/dashboard'
+import { useResource } from '@/lib/resource'
 import { useApp } from '@/stores/app'
 import { useToasts } from '@/stores/toast'
 import PageHeader from '@/components/PageHeader.vue'
 import EmptyState from '@/components/EmptyState.vue'
+import Skeleton from '@/components/Skeleton.vue'
 import WebhookForm from '@/components/webhooks/WebhookForm.vue'
 
 const app = useApp()
 const toasts = useToasts()
-const data = ref<{ enabled: boolean; base_url: string; subscriptions: Webhook[] } | null>(null)
-const error = ref('')
+// Cached per session: a revisit paints the last list at once and refreshes it in the background.
+const { data, error, pending, refreshing, reload, mutate } = useResource(
+	() => (app.dashboard?.ok ? 'webhooks' : null),
+	() => dashboard.webhooks(),
+)
 const creating = ref(false)
 const enabling = ref(false)
 const needsRestart = ref(false)
 const busyName = ref('')
 
-async function load() {
-	if (!app.dashboard?.ok) return
-	try {
-		data.value = await dashboard.webhooks()
-		error.value = ''
-	} catch (e) {
-		error.value = (e as Error).message
-	}
+// Rows only animate in or out right after an action, never on the first paint.
+const animate = ref(false)
+let animateTimer: ReturnType<typeof setTimeout> | undefined
+function animateNext() {
+	animate.value = true
+	clearTimeout(animateTimer)
+	animateTimer = setTimeout(() => (animate.value = false), 600)
 }
-onMounted(load)
-watch(() => app.dashboard?.ok, load)
+onBeforeUnmount(() => clearTimeout(animateTimer))
+
+function patchList(fn: (list: Webhook[]) => Webhook[]) {
+	mutate((d) => (d ? { ...d, subscriptions: fn(d.subscriptions) } : d))
+}
 
 async function enable() {
 	enabling.value = true
@@ -35,7 +42,7 @@ async function enable() {
 		const r = await dashboard.enableWebhooks()
 		needsRestart.value = !!r.needs_restart
 		toasts.push('Webhooks turned on')
-		await load()
+		await reload()
 	} catch (e) {
 		toasts.error((e as Error).message)
 	} finally {
@@ -54,29 +61,38 @@ async function copy(text: string) {
 
 async function setEnabled(w: Webhook, on: boolean) {
 	busyName.value = w.name
+	patchList((l) => l.map((x) => (x.name === w.name ? { ...x, enabled: on } : x)))
 	try {
 		await dashboard.setWebhookEnabled(w.name, on)
 		toasts.push(on ? 'Webhook turned on' : 'Webhook turned off')
-		await load()
 	} catch (e) {
 		toasts.error((e as Error).message)
 	} finally {
 		busyName.value = ''
 	}
+	// Also puts the switch back if the change failed.
+	await reload()
 }
 
 async function remove(w: Webhook) {
 	if (!confirm(`Delete the webhook "${w.name}"? Services posting to its URL will get an error.`)) return
 	busyName.value = w.name
+	animateNext()
+	patchList((l) => l.filter((x) => x.name !== w.name))
 	try {
 		await dashboard.deleteWebhook(w.name)
 		toasts.push('Webhook deleted')
-		await load()
 	} catch (e) {
 		toasts.error((e as Error).message)
 	} finally {
 		busyName.value = ''
 	}
+	await reload()
+}
+
+function created() {
+	animateNext()
+	reload()
 }
 </script>
 
@@ -97,11 +113,14 @@ async function remove(w: Webhook) {
 			<router-link to="/connect" class="btn-outline">Open connection settings</router-link>
 		</EmptyState>
 
-		<div v-else class="px-6 pb-16 md:px-10">
+		<div v-else class="relative px-6 pb-16 md:px-10">
+			<div v-if="refreshing" class="absolute inset-x-6 top-0 md:inset-x-10" aria-hidden="true">
+				<div class="refresh-bar" />
+			</div>
 			<p v-if="error" class="mb-4 max-w-[72ch] rounded-md bg-rose-soft px-3 py-2 text-sm text-rose">
 				Could not load webhooks: {{ error }}. Check the dashboard connection.
 			</p>
-			<p v-if="!data && !error" class="text-ink-3">Loading webhooks</p>
+			<Skeleton v-if="pending" :count="3" label="Loading webhooks" />
 
 			<div v-if="needsRestart" class="mb-6 max-w-[72ch] rounded-md bg-gold-soft px-3 py-2 text-sm">
 				Webhooks are turned on, but the Hermes gateway has to be restarted before it starts listening. Restart it on the
@@ -125,7 +144,13 @@ async function remove(w: Webhook) {
 				>
 					<button class="btn-primary" @click="creating = true"><Plus :size="16" />New webhook</button>
 				</EmptyState>
-				<ul v-else class="divide-y divide-line border-y border-line">
+				<TransitionGroup
+					v-else
+					tag="ul"
+					class="relative divide-y divide-line border-y border-line"
+					:name="animate ? 'rise' : 'none'"
+					:leave-active-class="animate ? 'rise-leave-active absolute inset-x-0' : undefined"
+				>
 					<li
 						v-for="w in data.subscriptions"
 						:key="w.name"
@@ -169,10 +194,10 @@ async function remove(w: Webhook) {
 							</button>
 						</div>
 					</li>
-				</ul>
+				</TransitionGroup>
 			</template>
 		</div>
 
-		<WebhookForm v-if="creating" @close="creating = false" @created="load" />
+		<WebhookForm v-if="creating" @close="creating = false" @created="created" />
 	</div>
 </template>

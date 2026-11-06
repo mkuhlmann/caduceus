@@ -1,31 +1,32 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed, onBeforeUnmount, ref } from 'vue'
 import { Plus, Search } from 'lucide-vue-next'
 import { gateway, type Job } from '@/lib/gateway'
+import { useResource } from '@/lib/resource'
 import { useToasts } from '@/stores/toast'
 import PageHeader from '@/components/PageHeader.vue'
 import EmptyState from '@/components/EmptyState.vue'
+import Skeleton from '@/components/Skeleton.vue'
 import ScheduleRow from '@/components/schedules/ScheduleRow.vue'
 import ScheduleForm from '@/components/schedules/ScheduleForm.vue'
 
 const toasts = useToasts()
-const jobs = ref<Job[] | null>(null)
-const error = ref('')
+// Cached per session: a revisit paints the last list at once and refreshes it in the background.
+const { data: jobs, error, pending, refreshing, reload, mutate } = useResource('schedules', () => gateway.jobs())
 const query = ref('')
 const busyId = ref('')
 const editing = ref<Job | null>(null)
 const creating = ref(false)
 
-async function load() {
-	try {
-		jobs.value = await gateway.jobs()
-		error.value = ''
-	} catch (e) {
-		error.value = (e as Error).message
-		jobs.value ??= []
-	}
+// Rows only animate in or out right after an action (pause, delete, ...), never on the first paint or a filter.
+const animate = ref(false)
+let animateTimer: ReturnType<typeof setTimeout> | undefined
+function animateNext() {
+	animate.value = true
+	clearTimeout(animateTimer)
+	animateTimer = setTimeout(() => (animate.value = false), 600)
 }
-onMounted(load)
+onBeforeUnmount(() => clearTimeout(animateTimer))
 
 const filtered = computed(() => {
 	const q = query.value.trim().toLowerCase()
@@ -57,31 +58,49 @@ const sections = computed(() => {
 	].filter((s) => s.items.length)
 })
 
-async function act(job: Job, fn: () => Promise<unknown>, done: string) {
+/**
+ * Runs an action on a schedule. `optimistic` changes the list at once (null removes the job);
+ * the list reloads afterwards either way, which also undoes the change if the action failed.
+ */
+async function act(job: Job, fn: () => Promise<unknown>, done: string, optimistic?: Partial<Job> | null) {
 	busyId.value = job.id
+	animateNext()
+	if (optimistic !== undefined)
+		mutate((list) =>
+			optimistic === null
+				? list?.filter((j) => j.id !== job.id)
+				: list?.map((j) => (j.id === job.id ? { ...j, ...optimistic } : j)),
+		)
 	try {
 		await fn()
 		toasts.push(done)
-		await load()
 	} catch (e) {
 		toasts.error((e as Error).message)
 	} finally {
 		busyId.value = ''
 	}
+	await reload()
 }
 const run = (j: Job) => act(j, () => gateway.runJob(j.id), 'Schedule started')
 const toggle = (j: Job) =>
 	isPaused(j)
-		? act(j, () => gateway.resumeJob(j.id), 'Schedule resumed')
-		: act(j, () => gateway.pauseJob(j.id), 'Schedule paused')
+		? act(
+				j,
+				() => gateway.resumeJob(j.id),
+				'Schedule resumed',
+				// Without a next run time a resumed job would look finished until the reload, so wait for it.
+				j.next_run_at ? { state: 'scheduled', enabled: true, paused: false } : undefined,
+			)
+		: act(j, () => gateway.pauseJob(j.id), 'Schedule paused', { state: 'paused', enabled: false, paused: true })
 function remove(j: Job) {
 	if (confirm(`Delete the schedule "${j.name}"? This cannot be undone.`))
-		act(j, () => gateway.deleteJob(j.id), 'Schedule deleted')
+		act(j, () => gateway.deleteJob(j.id), 'Schedule deleted', null)
 }
 async function saved() {
 	editing.value = null
 	creating.value = false
-	await load()
+	animateNext()
+	await reload()
 }
 </script>
 
@@ -91,11 +110,21 @@ async function saved() {
 			<button class="btn-primary" @click="creating = true"><Plus :size="16" />New schedule</button>
 		</PageHeader>
 
-		<div class="px-6 pb-16 md:px-10">
+		<div class="relative px-6 pb-16 md:px-10">
+			<div v-if="refreshing" class="absolute inset-x-6 top-0 md:inset-x-10" aria-hidden="true">
+				<div class="refresh-bar" />
+			</div>
 			<p v-if="error" class="mb-4 max-w-[72ch] rounded-md bg-rose-soft px-3 py-2 text-sm text-rose">
 				Could not load schedules: {{ error }}. Check the gateway connection.
 			</p>
-			<p v-if="jobs === null" class="text-ink-3">Loading schedules</p>
+			<div v-if="pending" class="mb-8">
+				<div class="skeleton mb-1 flex h-7 items-center" aria-hidden="true">
+					<span class="skeleton-bar h-4 w-20" />
+				</div>
+				<Skeleton :count="5" label="Loading schedules" />
+			</div>
+
+			<template v-else-if="!jobs" />
 
 			<EmptyState
 				v-else-if="!jobs.length && !error"
@@ -121,7 +150,12 @@ async function saved() {
 					<h2 class="mb-1 text-lg">
 						{{ s.title }} <span class="text-sm font-normal text-ink-3">{{ s.items.length }}</span>
 					</h2>
-					<ul class="divide-y divide-line border-y border-line">
+					<TransitionGroup
+						tag="ul"
+						class="relative divide-y divide-line border-y border-line"
+						:name="animate ? 'rise' : 'none'"
+						:leave-active-class="animate ? 'rise-leave-active absolute inset-x-0' : undefined"
+					>
 						<ScheduleRow
 							v-for="j in s.items"
 							:key="j.id"
@@ -133,7 +167,7 @@ async function saved() {
 							@edit="editing = j"
 							@remove="remove(j)"
 						/>
-					</ul>
+					</TransitionGroup>
 				</section>
 			</template>
 		</div>

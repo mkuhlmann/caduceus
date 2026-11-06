@@ -11,7 +11,7 @@ defineEmits<{ open: [] }>()
 	<button
 		type="button"
 		draggable="true"
-		class="block w-full cursor-grab rounded-lg border bg-surface p-3 text-left transition-colors hover:bg-surface-2 active:cursor-grabbing"
+		class="pressable block w-full cursor-grab rounded-lg border bg-surface p-3 text-left hover:bg-surface-2 active:cursor-grabbing"
 		:class="task.status === 'running' ? 'border-gold' : 'border-line'"
 		@click="$emit('open')"
 	>

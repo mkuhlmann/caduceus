@@ -7,6 +7,7 @@ import EmptyState from '@/components/EmptyState.vue'
 import ProjectFormModal from '@/components/projects/ProjectFormModal.vue'
 import ProjectDetail from '@/components/projects/ProjectDetail.vue'
 import HostFolders from '@/components/projects/HostFolders.vue'
+import Skeleton from '@/components/Skeleton.vue'
 import { useApp } from '@/stores/app'
 import { useProjects, PROJECT_COLORS } from '@/stores/projects'
 import { useSessions } from '@/stores/sessions'
@@ -20,13 +21,15 @@ const sessions = useSessions()
 const creating = ref(false)
 const error = ref('')
 
+// Projects stay in the store, so a revisit paints at once and refreshes in the background.
 onMounted(async () => {
+	if (!sessions.list.length) sessions.loadList()
 	try {
-		if (!projects.loaded) await projects.load()
+		await projects.load()
+		error.value = ''
 	} catch (e) {
 		error.value = (e as Error).message
 	}
-	if (!sessions.list.length) sessions.loadList()
 })
 
 const selected = computed(() => {
@@ -62,8 +65,12 @@ const back = () => router.push({ path: '/projects' })
 				<button class="btn-primary" @click="creating = true"><Plus :size="16" /> New project</button>
 			</PageHeader>
 
-			<div class="px-6 pb-16 md:px-10">
-				<p v-if="error" class="max-w-3xl text-sm text-rose" role="alert">Could not load projects: {{ error }}</p>
+			<div class="relative px-6 pb-16 md:px-10">
+				<div v-if="projects.refreshing" class="absolute inset-x-6 top-0 max-w-3xl md:inset-x-10" aria-hidden="true">
+					<div class="refresh-bar" />
+				</div>
+				<p v-if="error" class="mb-4 max-w-3xl text-sm text-rose" role="alert">Could not load projects: {{ error }}</p>
+				<Skeleton v-if="!projects.loaded && !error" :count="3" label="Loading projects" />
 				<EmptyState
 					v-else-if="projects.loaded && !projects.items.length"
 					title="No projects yet"
@@ -71,11 +78,10 @@ const back = () => router.push({ path: '/projects' })
 				>
 					<button class="btn-primary" @click="creating = true">Create a project</button>
 				</EmptyState>
-				<p v-else-if="!projects.loaded" class="text-ink-3" role="status">Loading projects</p>
-				<ul v-else class="max-w-3xl divide-y divide-line border-y border-line">
+				<ul v-else-if="projects.loaded" class="max-w-3xl divide-y divide-line border-y border-line">
 					<li v-for="{ p, last } in rows" :key="p.id">
 						<button
-							class="flex w-full items-center gap-3 px-2 py-3 text-left hover:bg-surface-2/50"
+							class="pressable flex w-full items-center gap-3 px-2 py-3 text-left hover:bg-surface-2/50"
 							@click="show(p.id)"
 						>
 							<span

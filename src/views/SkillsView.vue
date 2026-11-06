@@ -1,14 +1,16 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed, ref } from 'vue'
 import { Plus } from 'lucide-vue-next'
 import PageHeader from '@/components/PageHeader.vue'
 import EmptyState from '@/components/EmptyState.vue'
+import Skeleton from '@/components/Skeleton.vue'
 import ToggleSwitch from '@/components/settings/ToggleSwitch.vue'
 import SkillDetailModal from '@/components/skills/SkillDetailModal.vue'
 import SkillCreateModal from '@/components/skills/SkillCreateModal.vue'
 import SkillDiscover from '@/components/skills/SkillDiscover.vue'
 import { provenanceLabel } from '@/components/skills/frontmatter'
 import { dashboard, type Skill } from '@/lib/dashboard'
+import { useResource } from '@/lib/resource'
 import { useApp } from '@/stores/app'
 import { useToasts } from '@/stores/toast'
 
@@ -16,26 +18,17 @@ const app = useApp()
 const toasts = useToasts()
 
 const tab = ref<'installed' | 'discover'>('installed')
-const skills = ref<Skill[]>([])
-const loading = ref(false)
-const error = ref('')
+const res = useResource(
+	() => (app.dashboard?.ok ? 'skills' : null),
+	() => dashboard.skills(),
+)
+const skills = computed(() => res.data.value ?? [])
+const error = computed(() => (res.data.value ? '' : res.error.value))
 const filter = ref('')
 const disabledOnly = ref(false)
 const open = ref<string | null>(null)
 const creating = ref(false)
-
-async function load() {
-	loading.value = true
-	error.value = ''
-	try {
-		skills.value = await dashboard.skills()
-	} catch (e) {
-		error.value = (e as Error).message
-	} finally {
-		loading.value = false
-	}
-}
-onMounted(() => app.dashboard?.ok && load())
+const load = () => res.reload()
 
 const groups = computed(() => {
 	const q = filter.value.trim().toLowerCase()
@@ -55,13 +48,16 @@ const categories = computed(() => [...new Set(skills.value.map((s) => s.category
 const disabledCount = computed(() => skills.value.filter((s) => !s.enabled).length)
 const pretty = (c: string) => c.replace(/[-_]/g, ' ').replace(/^./, (x) => x.toUpperCase())
 
+const setEnabled = (name: string, enabled: boolean) =>
+	res.mutate((list) => list?.map((x) => (x.name === name ? { ...x, enabled } : x)))
+
 async function toggle(s: Skill, enabled: boolean) {
-	s.enabled = enabled
+	setEnabled(s.name, enabled)
 	try {
 		await dashboard.toggleSkill(s.name, enabled)
 		toasts.push(enabled ? 'Skill enabled' : 'Skill disabled')
 	} catch (e) {
-		s.enabled = !enabled
+		setEnabled(s.name, !enabled)
 		toasts.error(`Could not change ${s.name}. ${(e as Error).message}`)
 	}
 }
@@ -95,7 +91,7 @@ const used = (n: number) => (n === 0 ? 'Not used yet' : n === 1 ? 'Used once' : 
 					:key="t.id"
 					role="tab"
 					:aria-selected="tab === t.id"
-					class="-mb-px border-b-2 px-3 py-2 text-sm font-medium"
+					class="pressable -mb-px border-b-2 px-3 py-2 text-sm font-medium"
 					:class="tab === t.id ? 'border-ink text-ink' : 'border-transparent text-ink-2 hover:text-ink'"
 					@click="tab = t.id"
 				>
@@ -125,7 +121,13 @@ const used = (n: number) => (n === 0 ? 'Not used yet' : n === 1 ? 'Used once' : 
 				<p v-if="error" class="text-rose">
 					Could not load skills. {{ error }} <button class="underline" @click="load">Try again</button>
 				</p>
-				<p v-else-if="loading && !skills.length" class="text-ink-2">Loading skills...</p>
+				<Skeleton
+					v-else-if="res.pending.value"
+					variant="rows"
+					:count="6"
+					label="Loading skills"
+					class="mt-8 max-w-4xl"
+				/>
 				<p v-else-if="!groups.length" class="text-ink-2">
 					{{
 						skills.length
@@ -138,7 +140,7 @@ const used = (n: number) => (n === 0 ? 'Not used yet' : n === 1 ? 'Used once' : 
 					<h2 class="mb-1 text-lg font-semibold">{{ pretty(g.name) }}</h2>
 					<ul class="divide-y divide-line border-y border-line">
 						<li v-for="s in g.items" :key="s.name" class="flex items-center gap-4 py-3">
-							<button class="min-w-0 flex-1 rounded text-left" @click="open = s.name">
+							<button class="pressable min-w-0 flex-1 rounded text-left" @click="open = s.name">
 								<p class="font-medium" :class="!s.enabled && 'text-ink-3'">{{ s.name }}</p>
 								<p class="line-clamp-2 text-sm text-ink-2">{{ s.description }}</p>
 								<p class="mt-0.5 text-xs text-ink-3">

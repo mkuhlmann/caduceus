@@ -44,6 +44,9 @@ Tokens are in `src/style.css`; use them via Tailwind.
   - Icons: `lucide-vue-next`, size 16–18.
   - Time helpers: `src/lib/time.ts` (`relative`, `dateTime`, `toDate`).
   - Markdown: `renderMarkdown` from `src/lib/markdown.ts`, rendered into an element with class `prose-h`.
+  - Data loading: `useResource(key, fetcher)` from `src/lib/resource.ts` (stale-while-revalidate, cached per key for the session). Revisits must paint from cache; after a mutation use `mutate` for an optimistic update, then `reload`.
+  - Loading: `Skeleton.vue` (`variant` rows, lines or cards) in the spot the content will take, never "Loading…" text. `.refresh-bar` for background refreshes over data already shown.
+- **Motion:** only in answer to a user action, only on `transform` and `opacity` (it must hold 120Hz). Use the tokens (`--ease-out`, `--dur-fast`, `--dur`, `--dur-slow`) and the `<Transition>` names in `src/style.css` (`page`, `fade`, `rise`, `drawer`); `pressable` gives tap feedback (already in `btn*` and `icon-btn`). No idle or looping motion except skeletons and live-run indicators.
 - **Quality floor:**
   - Responsive down to 375px wide.
   - Keyboard reachable, with visible focus (already global).
