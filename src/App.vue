@@ -24,7 +24,10 @@ onMounted(async () => {
 		<span class="sr-only">Connecting to Hermes</span>
 	</div>
 	<LoginView v-else-if="app.uiAuth?.required && !app.uiAuth.authenticated" />
-	<div v-else class="flex h-full flex-col-reverse md:flex-row">
+	<div
+		v-else
+		class="flex h-full flex-col-reverse pt-[env(safe-area-inset-top)] pr-[env(safe-area-inset-right)] pl-[env(safe-area-inset-left)] md:flex-row md:pb-[env(safe-area-inset-bottom)]"
+	>
 		<AppRail />
 		<main class="min-h-0 min-w-0 flex-1 overflow-hidden">
 			<RouterView v-slot="{ Component }">

@@ -140,7 +140,9 @@ const greeting = computed(() => (project.value ? `New chat in ${project.value.na
 		</div>
 		<div v-if="drawer" class="fixed inset-0 z-40 md:hidden">
 			<div class="absolute inset-0 bg-black/40" @click="drawer = false" />
-			<div class="absolute inset-y-0 left-0 w-[85%] max-w-xs shadow-2xl">
+			<div
+				class="absolute inset-y-0 left-0 w-[85%] max-w-xs bg-surface pt-[env(safe-area-inset-top)] pb-[env(safe-area-inset-bottom)] shadow-2xl"
+			>
 				<SessionSidebar :active-id="id" @navigate="drawer = false" />
 			</div>
 		</div>

@@ -160,6 +160,17 @@ Run the compiled binary with `CADUCEUS_DIST` pointing at `dist/`.
 
 Both targets build from Linux. Set `CADUCEUS_DEVTOOLS=1` to get the webview's developer tools.
 
+## Phone
+
+The web UI is an installable app (PWA). Open Caduceus in the phone's browser and install it:
+
+- **Android (Chrome):** menu, then "Install app".
+- **iPhone (Safari):** share sheet, then "Add to Home Screen".
+
+It then opens full screen with its own icon. Browsers only offer installation over **HTTPS** (or on `localhost`), so put the relay behind a TLS reverse proxy such as Caddy or Tailscale Serve rather than opening `http://<ip>:7811`. The installed app keeps its own session, so sign in once inside it.
+
+The service worker (`src/sw.js`, written to `dist/sw.js` with a precache list by the build) caches only the built UI, so the app opens even when the relay is unreachable. It never caches or intercepts `/ui-api/*`, and each page load checks the network first, so a new deploy shows up on the next reload. The desktop app and the Vite dev server do not register it.
+
 ## Releases
 
 Versions are managed by [release-please](https://github.com/googleapis/release-please). It reads [Conventional Commits](https://www.conventionalcommits.org/) on `main` (`feat:`, `fix:`, `feat!:`) and keeps a release pull request open that bumps `package.json` and `CHANGELOG.md`. Merging it tags the version and creates the GitHub release; the release workflow then tags the Docker image on `ghcr.io` with the version, `<major>.<minor>` and `latest`, and builds the AppImage, the exe and the portable zip and attaches them to the release. Every push to `main` also publishes the image as `main`; desktop apps are built only for releases.

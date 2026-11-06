@@ -5,7 +5,7 @@ const toasts = useToasts()
 
 <template>
 	<div
-		class="pointer-events-none fixed right-4 bottom-20 z-50 flex flex-col items-end gap-2 md:bottom-4"
+		class="pointer-events-none fixed right-4 bottom-[calc(5rem+env(safe-area-inset-bottom))] z-50 flex flex-col items-end gap-2 md:bottom-4"
 		aria-live="polite"
 	>
 		<div
