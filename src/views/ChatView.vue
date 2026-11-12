@@ -316,7 +316,7 @@ function userView(text: string) {
 	}
 	return { notice: null, from: undefined, text: stripMentionNote(text) }
 }
-// In a bot's chat your own messages can take the bot's colour (Settings > Interface).
+// In a bot's chat your own messages and the send button can take the bot's colour (Settings > Interface).
 const messageTint = computed(() =>
 	bot.value && app.tintMessages ? messageFill(COLORS[resolveLook(bot.value.name, bot.value.look).color]!) : undefined,
 )
@@ -615,6 +615,7 @@ async function connectThisBot() {
 				<Composer
 					ref="composer"
 					:draft-key="id ?? (botName ? `bot:${botName}` : 'new')"
+					:accent="messageTint"
 					:running="running"
 					:disabled="creating || !app.gateway?.ok || (!!bot && !bot.connected)"
 					:placeholder="

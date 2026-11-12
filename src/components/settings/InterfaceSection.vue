@@ -29,7 +29,7 @@ const app = useApp()
 			<span class="text-sm font-medium">Colour my messages in bot chats</span>
 		</div>
 		<p class="mt-1 text-sm text-ink-2">
-			In a bot's chat, your messages take that bot's colour. Saved in this browser only.
+			In a bot's chat, your messages and the send button take that bot's colour. Saved in this browser only.
 		</p>
 
 		<label class="label mt-6" for="ui-start">Start page</label>

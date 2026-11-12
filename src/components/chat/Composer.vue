@@ -28,6 +28,8 @@ const props = defineProps<{
 	extraMentions?: MentionExtra[]
 	/** Group chats take text only. */
 	noImages?: boolean
+	/** Fill for the send button, e.g. the bot's colour in its chat; it must carry white text. */
+	accent?: string
 }>()
 const emit = defineEmits<{ send: [text: string, images: string[]]; stop: [] }>()
 const toasts = useToasts()
@@ -179,7 +181,7 @@ defineExpose({ focus: () => area.value?.focus(), seed })
 
 <template>
 	<form
-		class="relative rounded-2xl border bg-surface shadow-sm transition-colors focus-within:border-focus"
+		class="relative rounded-2xl border bg-surface shadow-sm transition-colors focus-within:border-ink-3"
 		:class="dragging ? 'border-gold' : 'border-line'"
 		@submit.prevent="submit"
 		@dragover.prevent="dragging = true"
@@ -280,7 +282,9 @@ defineExpose({ focus: () => area.value?.focus(), seed })
 				</button>
 				<button
 					type="submit"
-					class="grid size-8 place-items-center rounded-full bg-ink text-bg transition-opacity disabled:opacity-30"
+					class="grid size-8 place-items-center rounded-full transition-opacity disabled:opacity-30"
+					:class="accent ? 'text-white' : 'bg-ink text-bg'"
+					:style="accent ? { background: accent } : undefined"
 					:disabled="disabled || (!text.trim() && !images.length)"
 					aria-label="Send"
 				>
