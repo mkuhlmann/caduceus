@@ -7,6 +7,19 @@ export const router = createRouter({
 	history: createWebHashHistory(),
 	routes: [
 		{ path: '/', redirect: () => homePath() },
+		// A bot's chat and a group chat opened from the chat list keep the chat list beside them.
+		{
+			path: '/chat/bot/:name',
+			name: 'chat-bot',
+			component: () => import('./views/ChatView.vue'),
+			meta: { rail: 'chat', title: 'Chat' },
+		},
+		{
+			path: '/chat/room/:roomId',
+			name: 'chat-room',
+			component: () => import('./views/RoomView.vue'),
+			meta: { rail: 'chat', title: 'Group chat' },
+		},
 		{ path: '/chat/:id?', name: 'chat', component: () => import('./views/ChatView.vue'), meta: { title: 'Chat' } },
 		{ path: '/bots', name: 'bots', component: () => import('./views/BotsView.vue'), meta: { title: 'Bots' } },
 		{

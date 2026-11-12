@@ -3,6 +3,7 @@ import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import { CornerDownRight, PanelLeft, Settings2, Square, X } from 'lucide-vue-next'
 import BotSidebar from '@/components/bots/BotSidebar.vue'
+import SessionSidebar from '@/components/chat/SessionSidebar.vue'
 import BotAvatar from '@/components/bots/BotAvatar.vue'
 import RoomAvatar from '@/components/bots/RoomAvatar.vue'
 import RoomSettingsModal from '@/components/bots/RoomSettingsModal.vue'
@@ -22,6 +23,8 @@ import { useToasts } from '@/stores/toast'
  * faces move and the room shows who is thinking; approvals are answered in place.
  */
 const route = useRoute()
+// Opened from the chat list (/chat/room/:roomId), the room keeps the chat list beside it instead of the roster.
+const fromChats = computed(() => route.name === 'chat-room')
 const bots = useBots()
 const groups = useGroups()
 const toasts = useToasts()
@@ -355,7 +358,8 @@ const subtitle = computed(() => {
 <template>
 	<div class="flex h-full">
 		<div class="hidden md:block">
-			<BotSidebar :active-room="roomId" />
+			<SessionSidebar v-if="fromChats" :active-room="roomId" />
+			<BotSidebar v-else :active-room="roomId" />
 		</div>
 		<Transition name="drawer">
 			<div v-if="drawer" class="fixed inset-0 z-40 md:hidden">
@@ -363,14 +367,15 @@ const subtitle = computed(() => {
 				<div
 					class="drawer-panel absolute inset-y-0 left-0 w-[85%] max-w-xs bg-surface pt-[env(safe-area-inset-top)] pb-[env(safe-area-inset-bottom)] shadow-2xl"
 				>
-					<BotSidebar :active-room="roomId" @navigate="drawer = false" />
+					<SessionSidebar v-if="fromChats" :active-room="roomId" @navigate="drawer = false" />
+					<BotSidebar v-else :active-room="roomId" @navigate="drawer = false" />
 				</div>
 			</div>
 		</Transition>
 
 		<section class="flex min-w-0 flex-1 flex-col">
 			<header class="flex h-14 shrink-0 items-center gap-2 border-b border-line px-3 md:px-6">
-				<button class="icon-btn md:hidden" aria-label="Show bots" @click="drawer = true">
+				<button class="icon-btn md:hidden" :aria-label="fromChats ? 'Show chats' : 'Show bots'" @click="drawer = true">
 					<PanelLeft :size="18" />
 				</button>
 				<RoomAvatar

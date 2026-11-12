@@ -33,6 +33,9 @@ const bots = useBots()
 
 // On /bots/:name this is a bot's chat: its one `Bot Chat`, with the bot roster beside it.
 const botName = computed(() => (route.params.name as string | undefined) || undefined)
+// Opened from the chat list (/chat/bot/:name), the bot's chat keeps the chat list beside it instead of the roster.
+const fromChats = computed(() => route.name === 'chat-bot')
+const botBase = computed(() => (fromChats.value ? '/chat/bot' : '/bots'))
 const bot = computed(() => (botName.value ? bots.byName(botName.value) : undefined))
 const botState = computed(() => (botName.value ? bots.stateOf(botName.value) : { state: 'idle' as const }))
 const editingBot = ref(false)
@@ -313,8 +316,8 @@ async function connectThisBot() {
 <template>
 	<div class="flex h-full">
 		<div class="hidden md:block">
-			<BotSidebar v-if="botName" :active="botName" />
-			<SessionSidebar v-else :active-id="id" />
+			<BotSidebar v-if="botName && !fromChats" :active="botName" />
+			<SessionSidebar v-else :active-id="botName ? undefined : id" :active-bot="botName" />
 		</div>
 		<Transition name="drawer">
 			<div v-if="drawer" class="fixed inset-0 z-40 md:hidden">
@@ -322,15 +325,24 @@ async function connectThisBot() {
 				<div
 					class="drawer-panel absolute inset-y-0 left-0 w-[85%] max-w-xs bg-surface pt-[env(safe-area-inset-top)] pb-[env(safe-area-inset-bottom)] shadow-2xl"
 				>
-					<BotSidebar v-if="botName" :active="botName" @navigate="drawer = false" />
-					<SessionSidebar v-else :active-id="id" @navigate="drawer = false" />
+					<BotSidebar v-if="botName && !fromChats" :active="botName" @navigate="drawer = false" />
+					<SessionSidebar
+						v-else
+						:active-id="botName ? undefined : id"
+						:active-bot="botName"
+						@navigate="drawer = false"
+					/>
 				</div>
 			</div>
 		</Transition>
 
 		<section class="flex min-w-0 flex-1 flex-col">
 			<header class="flex h-14 shrink-0 items-center gap-2 border-b border-line px-3 md:px-6">
-				<button class="icon-btn md:hidden" :aria-label="botName ? 'Show bots' : 'Show chats'" @click="drawer = true">
+				<button
+					class="icon-btn md:hidden"
+					:aria-label="botName && !fromChats ? 'Show bots' : 'Show chats'"
+					@click="drawer = true"
+				>
 					<PanelLeft :size="18" />
 				</button>
 				<template v-if="botName">
@@ -424,7 +436,7 @@ async function connectThisBot() {
 							>Another conversation of {{ bot.displayName }}:
 							<span class="font-medium text-ink">{{ session?.title || 'Untitled' }}</span></span
 						>
-						<RouterLink :to="`/bots/${encodeURIComponent(bot.name)}`" class="btn-outline h-7"
+						<RouterLink :to="`${botBase}/${encodeURIComponent(bot.name)}`" class="btn-outline h-7"
 							>Back to Bot Chat</RouterLink
 						>
 					</div>

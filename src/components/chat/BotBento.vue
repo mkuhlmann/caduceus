@@ -12,7 +12,7 @@ import { useGroups, type Room } from '@/stores/groups'
  * news, get a wide card with a status line; every other bot is a small tile. It heads the chat list and scrolls
  * away with it, capped at three rows; the rest are one tap away under "All bots".
  */
-const props = defineProps<{ filter?: string }>()
+const props = defineProps<{ filter?: string; activeBot?: string; activeRoom?: string }>()
 const emit = defineEmits<{ navigate: [] }>()
 const bots = useBots()
 const groups = useGroups()
@@ -96,9 +96,17 @@ const items = computed<Item[]>(() => {
 	const rank = (i: Item) =>
 		i.span > 1 ? 0 : i.kind === 'bot' && bots.unread(i.bot.name) ? 1 : i.kind === 'bot' ? 2 : 3
 	const all = [...botItems, ...roomItems].map((i, n) => ({ i, n })).sort((a, b) => rank(a.i) - rank(b.i) || a.n - b.n)
+	// The open bot or room always has a tile, so the chat beside the list stays marked; it takes the cells of the
+	// last small tile when the grid is full.
+	const isOpen = (i: Item) => (i.kind === 'bot' ? i.bot.name === props.activeBot : i.room.room_id === props.activeRoom)
+	const openOne = all.find(({ i }) => isOpen(i))?.i
 	const out: Item[] = []
-	let used = 0
+	let used = openOne ? openOne.span : 0
 	for (const { i } of all) {
+		if (i === openOne) {
+			out.push(i)
+			continue
+		}
 		if (used + i.span > CELLS) continue
 		out.push(i)
 		used += i.span
@@ -132,8 +140,9 @@ const spare = computed(() => !props.filter && items.value.reduce((n, i) => n + i
 			<template v-for="it in items" :key="it.key">
 				<RouterLink
 					v-if="it.kind === 'bot'"
-					:to="`/bots/${encodeURIComponent(it.bot.name)}`"
-					class="pressable relative flex min-w-0 rounded-[10px] bg-surface-2 hover:bg-surface-3"
+					:to="`/chat/bot/${encodeURIComponent(it.bot.name)}`"
+					:aria-current="it.bot.name === activeBot ? 'page' : undefined"
+					class="pressable relative flex min-w-0 rounded-[10px] bg-surface-2 hover:bg-surface-3 aria-[current=page]:bg-surface-3 aria-[current=page]:ring-1 aria-[current=page]:ring-line"
 					:class="
 						it.span === 2
 							? 'col-span-2 items-center gap-2.5 p-2.5'
@@ -169,8 +178,9 @@ const spare = computed(() => !props.filter && items.value.reduce((n, i) => n + i
 				</RouterLink>
 				<RouterLink
 					v-else
-					:to="`/bots/rooms/${encodeURIComponent(it.room.room_id)}`"
-					class="pressable relative flex min-w-0 rounded-[10px] bg-surface-2 hover:bg-surface-3"
+					:to="`/chat/room/${encodeURIComponent(it.room.room_id)}`"
+					:aria-current="it.room.room_id === activeRoom ? 'page' : undefined"
+					class="pressable relative flex min-w-0 rounded-[10px] bg-surface-2 hover:bg-surface-3 aria-[current=page]:bg-surface-3 aria-[current=page]:ring-1 aria-[current=page]:ring-line"
 					:class="
 						it.span === 3
 							? 'col-span-3 items-center gap-2.5 px-2.5 py-2'

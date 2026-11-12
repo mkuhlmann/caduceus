@@ -10,7 +10,7 @@ import SessionMenu from './SessionMenu.vue'
 import BotBento from './BotBento.vue'
 import { useBots } from '@/stores/bots'
 
-const props = defineProps<{ activeId?: string }>()
+const props = defineProps<{ activeId?: string; activeBot?: string; activeRoom?: string }>()
 const emit = defineEmits<{ navigate: [] }>()
 const sessions = useSessions()
 const projects = useProjects()
@@ -80,7 +80,7 @@ function newChat() {
 		</div>
 
 		<div class="min-h-0 flex-1 overflow-y-auto px-2 pb-4">
-			<BotBento :filter="filter" @navigate="emit('navigate')" />
+			<BotBento :filter="filter" :active-bot="activeBot" :active-room="activeRoom" @navigate="emit('navigate')" />
 			<p v-if="sessions.listError" class="px-2 py-3 text-sm text-rose">{{ sessions.listError }}</p>
 			<div
 				v-else-if="!sessions.list.length && sessions.loadingList"

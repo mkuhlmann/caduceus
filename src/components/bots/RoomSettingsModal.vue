@@ -88,7 +88,7 @@ async function disband() {
 		await groups.disband(props.room.room_id)
 		toasts.push(`${props.room.name} disbanded`)
 		emit('close')
-		router.push('/bots')
+		router.push(router.currentRoute.value.name === 'chat-room' ? '/chat' : '/bots')
 	} catch (e) {
 		toasts.error(`Could not disband the group chat. ${(e as Error).message}`)
 	} finally {
