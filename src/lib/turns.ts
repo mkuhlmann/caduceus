@@ -139,3 +139,18 @@ export function finalText(turn: AgentTurn) {
 	const texts = turn.steps.filter((s): s is TextStep => s.kind === 'text')
 	return texts.at(-1)?.text ?? ''
 }
+
+/**
+ * The agent's work so far, read from the messages Hermes saved after message id `after`: for a turn whose stream
+ * carries no steps (a bot's Bot Chat runs in the bot's own queue and reports only its end). Calls whose results
+ * are not saved yet are still running.
+ */
+export function savedProgress(messages: Message[], after: number): Pick<AgentTurn, 'steps' | 'reasoning'> | null {
+	const fresh = messages.filter((m) => Number(m.id) > after && m.role !== 'user')
+	const turn = buildTurns(fresh)
+		.filter((t): t is AgentTurn => t.kind === 'agent')
+		.at(-1)
+	if (!turn) return null
+	for (const s of turn.steps) if (s.kind === 'tool' && s.output == null) s.status = 'running'
+	return { steps: turn.steps, reasoning: turn.reasoning }
+}

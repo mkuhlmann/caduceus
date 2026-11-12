@@ -32,6 +32,15 @@ const app = useApp()
 			In a bot's chat, your messages and the send button take that bot's colour. Saved in this browser only.
 		</p>
 
+		<div class="mt-6 flex items-center gap-3">
+			<ToggleSwitch v-model="app.runStats" label="Show speed under replies" />
+			<span class="text-sm font-medium">Show speed under replies</span>
+		</div>
+		<p class="mt-1 text-sm text-ink-2">
+			After a reply, show how fast the model read the prompt (pp/s) and wrote its answer (tg/s), and how long the whole
+			turn took. Saved in this browser only.
+		</p>
+
 		<label class="label mt-6" for="ui-start">Start page</label>
 		<select id="ui-start" v-model="app.startPage" class="field">
 			<option value="chat">Chat</option>

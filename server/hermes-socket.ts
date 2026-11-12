@@ -25,7 +25,13 @@ let ws: WebSocket | null = null
 let ready: Promise<void> | null = null
 let nextId = 0
 const pending = new Map<number, Pending>()
-const listeners = new Set<(event: { type: string; payload: unknown }) => void>()
+/** One event Hermes pushed; `params` is the whole frame, with `session_id` and the turn's stamps when it has them. */
+export type SocketEvent = { type: string; payload: any; params?: Record<string, any> }
+const listeners = new Set<(event: SocketEvent) => void>()
+/** Listeners inside the relay (session viewers); told with `socket.closed` when the socket goes away. */
+const viewers = new Set<(event: SocketEvent) => void>()
+// Hermes runs sessions through a session authority, the only mode in which a socket can view a live session.
+let authority = false
 let retry = 0
 let retryTimer: ReturnType<typeof setTimeout> | undefined
 
@@ -42,6 +48,7 @@ function close(reason: string) {
 		p.reject(new RpcError(`Hermes socket closed: ${reason}`, 'socket_closed'))
 	}
 	pending.clear()
+	for (const fn of viewers) fn({ type: 'socket.closed', payload: { reason } })
 }
 
 /** A one-use ticket for the socket, minted with the relay's dashboard login. */
@@ -76,8 +83,10 @@ function connect(): Promise<void> {
 			socket.onmessage = (e) => {
 				const frame = parse(e.data)
 				// Hermes greets every socket with gateway.ready before it answers calls.
-				if (frame?.method === 'event' && frame.params?.type === 'gateway.ready') resolve()
-				else handle(frame)
+				if (frame?.method === 'event' && frame.params?.type === 'gateway.ready') {
+					authority = !!frame.params.payload?.session_authority
+					resolve()
+				} else handle(frame)
 			}
 		})
 		retry = 0
@@ -87,7 +96,7 @@ function connect(): Promise<void> {
 			if (ws !== socket) return
 			close('closed by Hermes')
 			// Keep listening for change events while someone watches; calls reconnect on demand anyway.
-			if (listeners.size)
+			if (listeners.size || viewers.size)
 				retryTimer = setTimeout(() => connect().catch(() => {}), Math.min(30_000, 1000 * 2 ** retry++))
 		}
 	})().catch((e) => {
@@ -119,13 +128,24 @@ function handle(frame: any) {
 		return
 	}
 	if (frame.method === 'event' && frame.params?.type) {
-		const event = { type: String(frame.params.type), payload: frame.params.payload ?? null }
+		const event = { type: String(frame.params.type), payload: frame.params.payload ?? null, params: frame.params }
 		for (const fn of listeners) fn(event)
-		return
+		for (const fn of viewers) fn(event)
 	}
-	// A request from Hermes (an approval for a session on this socket): this socket starts no sessions, so decline.
-	if (frame.id != null && frame.method)
-		ws?.send(JSON.stringify({ jsonrpc: '2.0', id: frame.id, error: { code: -32601, message: 'not supported' } }))
+	// Requests from Hermes (a sudo password, a secret, a question) go to every viewer of a session. Any answer,
+	// even an error, would settle them for Hermes Desktop too, so they are left to the apps that show them.
+}
+
+/** Open the socket and say whether Hermes can show a live session to a viewer on it. */
+export async function viewerSupport(): Promise<boolean> {
+	await connect()
+	return authority
+}
+
+/** Listen to every event on the socket, inside the relay; returns the unsubscribe. */
+export function onSocketEvent(fn: (event: SocketEvent) => void): () => void {
+	viewers.add(fn)
+	return () => viewers.delete(fn)
 }
 
 /** Call a Hermes JSON-RPC method over the shared socket. */

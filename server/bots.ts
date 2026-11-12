@@ -3,7 +3,7 @@ import { mkdirSync, readFileSync, writeFileSync, existsSync } from 'node:fs'
 import { join, dirname } from 'node:path'
 import { randomBytes } from 'node:crypto'
 import { relay } from './relay'
-import { rpc, RpcError } from './hermes-socket'
+import { rpc, RpcError, viewerSupport } from './hermes-socket'
 
 /**
  * Hermes bots are profiles. The dashboard creates and deletes them; the multiplexed gateway serves each one under
@@ -265,6 +265,50 @@ function fail(set: { status?: number | string }, e: unknown) {
 	return { error: { message: err.message, code: err.code } }
 }
 
+type Attached = { session_id?: string; subscription_id?: string; revision?: number; execution_generation?: number }
+
+/**
+ * Compact on a socket the gateway serves (the Webapp's): there the chat is the gateway's own, and compacting is a
+ * revision-fenced `session.mutate`, as Hermes Desktop sends it. The attach only reads; it is let go of afterwards.
+ */
+async function compactOnAuthority(name: string, sessionId: string) {
+	const scope = name === 'default' ? {} : { profile: name }
+	const a = await rpc<Attached>('session.resume', { ...scope, session_id: sessionId, omit_messages: true })
+	try {
+		if (!a.session_id || typeof a.revision !== 'number')
+			throw new BotError(502, 'Hermes did not open the chat for compacting.')
+		const r = await rpc<Record<string, any>>(
+			'session.mutate',
+			{
+				...scope,
+				session_id: a.session_id,
+				request_id: randomBytes(16).toString('hex'),
+				expected_revision: a.revision,
+				...(typeof a.execution_generation === 'number' ? { expected_generation: a.execution_generation } : {}),
+				operation: 'compress',
+				payload: {},
+			},
+			300_000,
+		)
+		const status = typeof r.status === 'string' ? r.status : null
+		const removed = typeof r.removed === 'number' ? r.removed : null
+		return {
+			ok: true,
+			compressed: status !== 'aborted' && status !== 'noop' && removed !== 0,
+			status,
+			removed,
+			message: typeof r.message === 'string' ? r.message : null,
+		}
+	} finally {
+		if (a.subscription_id)
+			rpc('session.detach', {
+				...scope,
+				session_id: a.session_id ?? sessionId,
+				subscription_id: a.subscription_id,
+			}).catch(() => {})
+	}
+}
+
 export const botRoutes = new Elysia({ prefix: '/ui-api/bots' })
 	.get('/', async ({ set }) => {
 		try {
@@ -392,6 +436,11 @@ export const botRoutes = new Elysia({ prefix: '/ui-api/bots' })
 	.post('/:name/compact', async ({ params, body, set }) => {
 		const sessionId = String((body as any)?.sessionId ?? '')
 		if (!sessionId) return fail(set, new BotError(400, 'Which chat should be compacted?'))
+		try {
+			if (await viewerSupport()) return await compactOnAuthority(params.name, sessionId)
+		} catch (e) {
+			return fail(set, e)
+		}
 		let runtime = ''
 		try {
 			const r = await rpc<{ session_id?: string }>('session.resume', {

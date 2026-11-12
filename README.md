@@ -121,6 +121,28 @@ docker build -t caduceus .
    ```
 2. Run the dashboard: `hermes dashboard --host 0.0.0.0 --no-open`. A non-loopback dashboard needs a login, so set `HERMES_DASHBOARD_BASIC_AUTH_USERNAME`, `HERMES_DASHBOARD_BASIC_AUTH_PASSWORD` and `HERMES_DASHBOARD_BASIC_AUTH_SECRET`. Behind a reverse proxy, also set `dashboard.public_url`.
 
+### Bots' chats: the dashboard or the Webapp
+
+A bot's chat does not run like other chats. Hermes hands each message to the bot's own queue inside the gateway, and the chat stream reports nothing until the reply is done. Only an app socket served by the gateway itself can watch such a turn live and answer the approvals it asks for. The standalone dashboard (`hermes dashboard`, port 9119) runs as a separate process and cannot.
+
+With the standalone dashboard, Caduceus shows a bot's work as Hermes saves it: reasoning, tool steps and text appear every couple of seconds, not word by word. Approvals that a bot's turn asks for do not reach Caduceus; answer them in Hermes Desktop, or they run into Hermes' timeout.
+
+Pointed at the dashboard the gateway hosts, Caduceus watches a bot's turn as Hermes Desktop does: reasoning, tool steps and the reply stream in as they happen, and approvals show in the chat with their buttons. Set `HERMES_DASHBOARD_URL` to that address; everything else Caduceus reads from the dashboard is served there too.
+
+That dashboard is the Webapp (Hermes Desktop in a browser). It is off by default and is turned on in Hermes' `config.yaml`; see [Running the Webapp](https://github.com/NousResearch/hermes-agent/blob/main/website/docs/user-guide/docker.md#running-the-webapp) in the Hermes docs:
+
+```yaml
+webapp:
+  enabled: true
+  host: 0.0.0.0 # in a container; the default 127.0.0.1 is unreachable from outside it
+  port: 9120
+  public_url: 'https://hermes-webapp.example.com'
+```
+
+- Its default port is 9120, next to the dashboard's 9119. Both share their sign-in settings, so the dashboard's username and password work on it too.
+- It can take port 9119 instead (`port: 9119`), but only with the standalone dashboard stopped, as two processes cannot listen on one port. The address then shows Hermes Desktop rather than the dashboard's pages.
+- A signed-in Webapp user can run any command as the account Hermes runs under. Keep it behind sign-in and HTTPS, like the dashboard.
+
 ## Configuration
 
 Connection settings come from the environment or from the app's connection page. When they are set in the environment, the connection page is read-only.

@@ -13,6 +13,9 @@ export type Session = {
 	tool_call_count?: number
 	input_tokens?: number
 	output_tokens?: number
+	cache_read_tokens?: number
+	reasoning_tokens?: number
+	api_call_count?: number
 	estimated_cost_usd?: number
 	parent_session_id?: string | null
 	last_active?: number

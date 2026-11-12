@@ -6,9 +6,11 @@ import { prettyToolName } from '@/lib/turns'
 import { handleCodeCopy } from '@/lib/markdown'
 import ToolWaypoint from './ToolWaypoint.vue'
 import MarkdownBlocks from './MarkdownBlocks.vue'
+import RunStatsLine from './RunStatsLine.vue'
+import type { RunStats } from '@/lib/run-stats'
 
 /** `bot`: a bot's chat, where the bot's face beside the turn shows that it is live, so the route stays quiet. */
-const props = defineProps<{ turn: AgentTurn; status?: string; bot?: boolean }>()
+const props = defineProps<{ turn: AgentTurn; status?: string; bot?: boolean; stats?: RunStats }>()
 const emit = defineEmits<{ approve: [choice: string] }>()
 
 type Segment =
@@ -57,6 +59,7 @@ const RESOLVED_LABELS: Record<string, string> = {
 	session: 'Allowed for this chat',
 	always: 'Always allowed',
 	deny: 'Denied',
+	elsewhere: 'Answered elsewhere',
 }
 
 const waiting = computed(() => props.turn.live && props.turn.steps.length === 0)
@@ -149,6 +152,8 @@ const waiting = computed(() => props.turn.live && props.turn.steps.length === 0)
 		</p>
 
 		<p v-if="turn.error" class="mt-2 max-w-[72ch] rounded-md bg-rose-soft px-3 py-2 text-sm">{{ turn.error }}</p>
+
+		<RunStatsLine v-if="stats && !turn.live" :stats="stats" />
 	</article>
 </template>
 

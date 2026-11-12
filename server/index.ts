@@ -6,6 +6,7 @@ import { relay } from './relay'
 import { authGuard, authRoutes } from './auth'
 import { projectRoutes } from './projects'
 import { botRoutes } from './bots'
+import { botWatchRoutes } from './bot-watch'
 import { rpcRoutes } from './hermes-socket'
 import { runRoutes, trackChatStream } from './runs'
 import { embedded } from './embedded'
@@ -30,6 +31,7 @@ const app = new Elysia()
 	.onBeforeHandle({ as: 'global' }, authGuard)
 	.use(projectRoutes)
 	.use(botRoutes)
+	.use(botWatchRoutes)
 	.use(rpcRoutes)
 	.use(runRoutes)
 	.get('/ui-api/connection', () => publicConnection())

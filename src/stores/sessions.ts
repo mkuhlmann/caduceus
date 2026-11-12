@@ -1,6 +1,7 @@
 import { defineStore } from 'pinia'
 import { computed, reactive, ref, shallowReactive, shallowRef, watch } from 'vue'
 import {
+	BOT_CHAT_TITLE,
 	gateway,
 	pendingApproval,
 	sessionProfile,
@@ -8,12 +9,15 @@ import {
 	type Message,
 	type Session,
 } from '@/lib/gateway'
-import { buildTurns, type AgentTurn, type ApprovalStep, type ToolStep, type Turn } from '@/lib/turns'
+import { buildTurns, savedProgress, type AgentTurn, type ApprovalStep, type ToolStep, type Turn } from '@/lib/turns'
 import { useToasts } from './toast'
 import { useProjects } from './projects'
 import { forgetTranscript, readTranscript, saveTranscript } from '@/lib/transcript-cache'
 import { fetchOlder, fetchTail, LIVE_TAIL, mergeTail, prependOlder, TAIL, type Tail } from '@/lib/transcript-pages'
 import { onRpcEvent } from '@/lib/rpc'
+import { watchBotChat, type BotWatch, type WatchEvent } from '@/lib/bot-watch'
+import { post } from '@/lib/http'
+import { counters, RunClock, savedStats, saveStats, turnStats, turnTokens, type RunStats } from '@/lib/run-stats'
 import { useApp } from './app'
 
 type Live = {
@@ -22,6 +26,8 @@ type Live = {
 	user: { text: string; images: string[] }
 	abort: AbortController
 	approval?: ApprovalRequest
+	/** An approval a Bot Chat's turn asks for, answered on the Hermes socket rather than through a run. */
+	prompt?: { profile: string; session: string; generation: number; id: string }
 	status?: string
 	stopRequested?: boolean
 }
@@ -34,6 +40,8 @@ const IDLE_MS = 6000
 // A transcript that stopped mid-turn longer ago than this is an interrupted run, not a live one.
 const STALE_S = 10 * 60
 const RUNS_MS = 4000
+// How often a Bot Chat's saved steps are read while the bot works.
+const SAVED_MS = 1500
 // Hermes titles a chat instantly from the first message, then upgrades it with a model in the background,
 // often after the run has ended. Look again a few times so the better title shows up.
 const TITLE_CHECKS_MS = [4000, 12000, 30000]
@@ -154,6 +162,8 @@ export const useSessions = defineStore('sessions', () => {
 	const activeRuns = ref<Record<string, string>>({})
 	// Bots' conversations: kept apart so they never show up among Hermes' own chats.
 	const botSessions = reactive<Record<string, Session>>({})
+	// Speed of replies streamed in this browser, by `<session>:<turn key>`.
+	const runStats = shallowRef<Record<string, RunStats>>(savedStats())
 
 	/** Add a session fetched by id to the list it belongs to; moved to the top unless `inPlace`. */
 	function place(s: Session, inPlace = false) {
@@ -428,6 +438,36 @@ export const useSessions = defineStore('sessions', () => {
 		const turn = reactive<AgentTurn>({ kind: 'agent', key: 'live-agent', steps: [], reasoning: '', live: true })
 		const l: Live = reactive({ turn, user: { text, images }, abort: new AbortController() }) as Live
 		live[id] = l
+		const clock = useApp().runStats ? new RunClock() : null
+		const before = clock ? gateway.session(id).then(counters, () => null) : null
+		let usage: { input_tokens?: number; output_tokens?: number } | undefined
+
+		// A bot's Bot Chat runs in the bot's own queue, and its stream reports nothing until the reply is done.
+		// Where Hermes lets a socket view the chat, the turn streams from there (`onWatch` below). Otherwise it is
+		// filled in from the steps Hermes saves as it goes, until the stream says more.
+		const botChat = byId(id)?.title === BOT_CHAT_TITLE
+		const profile = sessionProfile(id) ?? 'default'
+		let watch: BotWatch | null = null
+		let streamed = false
+		let savedTimer: ReturnType<typeof setTimeout> | undefined
+		const heldIds = (messages[id] ?? []).map((m) => Number(m.id)).filter(Number.isFinite)
+		let after = heldIds.length ? Math.max(...heldIds) : undefined
+		const watchSaved = async () => {
+			if (live[id] !== l || streamed) return
+			try {
+				const { ms } = await fetchTail(id, LIVE_TAIL * 2)
+				// Nothing held yet: the work starts after the newest message from a person, this one.
+				after ??= Number([...ms].reverse().find((m) => m.role === 'user')?.id ?? NaN)
+				const p = live[id] === l && !streamed && Number.isFinite(after) ? savedProgress(ms, after) : null
+				if (p && (p.steps.length || p.reasoning)) {
+					turn.steps = p.steps
+					turn.reasoning = p.reasoning
+				}
+			} catch {
+				// The next read tries again; the reply arrives with the stream's end either way.
+			}
+			if (live[id] === l && !streamed) savedTimer = setTimeout(watchSaved, SAVED_MS)
+		}
 
 		// Tokens arrive faster than the screen refreshes. Collect them and apply them once per frame, so a
 		// streaming reply re-renders at most once per frame however fast the model writes.
@@ -455,14 +495,126 @@ export const useSessions = defineStore('sessions', () => {
 			if (!frame) frame = requestAnimationFrame(flush)
 		}
 
+		// A turn already running when the watch began is someone else's: this message waits behind it.
+		let otherTurn: number | null = null
+		const onWatch = (ev: WatchEvent) => {
+			if (live[id] !== l || (otherTurn !== null && ev.generation === otherTurn)) return
+			const p = ev.payload ?? {}
+			const text = typeof p.text === 'string' ? p.text : ''
+			streamed = true
+			switch (ev.type) {
+				case 'message.start':
+					clock?.turnStarted()
+					return
+				case 'message.delta':
+					if (!text) return
+					clock?.output()
+					written += text
+					return later()
+				case 'thinking.delta':
+					// Hermes' spinner line ("reasoning..."), not what the model thinks.
+					return
+				case 'reasoning.delta':
+					if (!text) return
+					clock?.output(true)
+					thought += text
+					return later()
+				case 'reasoning.available':
+					// A finished block, from a model that does not stream its reasoning.
+					if (text && !thought && !turn.reasoning.endsWith(text)) {
+						clock?.output()
+						thought += (turn.reasoning ? '\n\n' : '') + text
+						later()
+					}
+					return
+			}
+			flush()
+			switch (ev.type) {
+				case 'message.interim':
+					if (text && !p.already_streamed) {
+						clock?.output()
+						turn.steps.push({ kind: 'text', text })
+					}
+					break
+				case 'tool.start':
+					clock?.toolStarted()
+					turn.steps.push({
+						kind: 'tool',
+						id: p.tool_id ?? p.tool_call_id,
+						name: p.name ?? p.tool_name ?? 'tool',
+						preview: p.context ?? null,
+						args: p.args && typeof p.args === 'object' ? p.args : null,
+						status: 'running',
+					})
+					break
+				case 'tool.complete': {
+					clock?.toolDone()
+					const tid = p.tool_id ?? p.tool_call_id
+					const step = [...turn.steps]
+						.reverse()
+						.find(
+							(s): s is ToolStep =>
+								s.kind === 'tool' && s.status === 'running' && (tid ? s.id === tid : s.name === p.name),
+						)
+					if (step) {
+						step.status = p.is_error ? 'failed' : 'done'
+						if (typeof p.result_text === 'string') step.output = p.result_text
+						else if (typeof p.result === 'string') step.output = p.result
+					}
+					break
+				}
+				case 'status.update':
+					if (text) l.status = text
+					break
+				case 'approval.request': {
+					const generation = ev.generation ?? p.execution_generation
+					if (!watch || typeof generation !== 'number' || !p.prompt_id) break
+					const choices: string[] = p.choices ?? ['once', 'session', 'always', 'deny']
+					l.prompt = { profile, session: watch.session, generation, id: p.prompt_id }
+					l.approval = { run_id: '', command: p.command, description: p.description, choices }
+					turn.steps.push({ kind: 'approval', command: p.command, description: p.description, choices })
+					break
+				}
+				case 'approval.settled':
+					if (l.prompt?.id !== p.prompt_id) break
+					// Answered somewhere else (Hermes Desktop, another tab) or run out: this one no longer can.
+					for (const s of turn.steps) if (s.kind === 'approval' && !s.resolved) s.resolved = 'elsewhere'
+					l.prompt = undefined
+					l.approval = undefined
+					break
+				case 'session.replay_gap':
+					// The view fell behind and Hermes dropped it: read the saved steps instead.
+					watch?.close()
+					streamed = false
+					savedTimer = setTimeout(watchSaved, SAVED_MS)
+					break
+			}
+		}
+		if (botChat) {
+			watch = await watchBotChat(profile, id, onWatch)
+			if (watch?.running) otherTurn = watch.generation
+			if (!watch) savedTimer = setTimeout(watchSaved, SAVED_MS)
+		}
+
 		try {
 			for await (const ev of gateway.chat(id, payload, { signal: l.abort.signal })) {
+				if (!['run.started', 'run.finished', 'assistant.completed', 'status', 'error'].includes(ev.type)) {
+					if (!streamed && savedTimer !== undefined) {
+						// The stream carries the steps after all: start the turn over from it.
+						turn.steps = []
+						turn.reasoning = ''
+					}
+					streamed = true
+				}
 				if (ev.type === 'assistant.delta') {
+					clock?.output()
 					written += ev.delta
 					later()
 					continue
 				}
 				if (ev.type === 'reasoning') {
+					// A finished block, not a stream: the reasoning was written before it arrived.
+					clock?.output()
 					thought += ev.delta
 					later()
 					continue
@@ -477,9 +629,11 @@ export const useSessions = defineStore('sessions', () => {
 						setTimeout(() => refreshSession(id, true), 1500)
 						break
 					case 'assistant.commentary':
+						clock?.output()
 						turn.steps.push({ kind: 'text', text: ev.text })
 						break
 					case 'tool.started':
+						clock?.toolStarted()
 						turn.steps.push({
 							kind: 'tool',
 							name: ev.tool,
@@ -489,6 +643,7 @@ export const useSessions = defineStore('sessions', () => {
 						})
 						break
 					case 'tool.completed': {
+						clock?.toolDone()
 						const step = [...turn.steps]
 							.reverse()
 							.find((s): s is ToolStep => s.kind === 'tool' && s.name === ev.tool && s.status === 'running')
@@ -511,6 +666,7 @@ export const useSessions = defineStore('sessions', () => {
 						break
 					case 'run.finished':
 						if (ev.status === 'failed') turn.error = ev.error || 'The run failed.'
+						if (ev.status === 'completed') usage = ev.usage
 						break
 					case 'error':
 						turn.error = ev.message
@@ -527,6 +683,11 @@ export const useSessions = defineStore('sessions', () => {
 			}
 		} finally {
 			flush()
+			clearTimeout(savedTimer)
+			watch?.close()
+			const timing = clock?.finish()
+			// Read off saved steps, the turn has no timing of its own to split into reading and writing.
+			if (timing && !streamed) timing.promptMs = timing.genMs = timing.toolMs = undefined
 			const failed = turn.error
 			// A load that started before the run ended would miss its last messages.
 			await inflight.get(id)
@@ -538,7 +699,22 @@ export const useSessions = defineStore('sessions', () => {
 				lastError.value = rest
 			}
 			await settle(id)
+			if (timing && usage && !failed) {
+				const last = turnsOf(messages[id] ?? []).at(-1)
+				if (last?.kind === 'agent')
+					recordStats(`${id}:${last.key}`, turnStats(timing, turnTokens(await before, counters(byId(id)), usage)))
+			}
 		}
+	}
+
+	function recordStats(key: string, stats: RunStats) {
+		saveStats(key, stats)
+		runStats.value = { ...runStats.value, [key]: stats }
+	}
+
+	/** How fast a reply ran, when it streamed in this browser with the speed line on. */
+	function statsFor(id: string, turnKey: string): RunStats | undefined {
+		return runStats.value[`${id}:${turnKey}`]
 	}
 
 	/** Fetch a session again; moved to the top unless `inPlace`. */
@@ -577,6 +753,26 @@ export const useSessions = defineStore('sessions', () => {
 			try {
 				await gateway.approve(r.approval, choice, id)
 				r.approval = undefined
+			} catch (e) {
+				toasts.error(`Could not send the decision: ${(e as Error).message}`)
+			}
+			return
+		}
+		if (l?.prompt) {
+			const p = l.prompt
+			try {
+				await post(`ui-api/bots/${encodeURIComponent(p.profile)}/approval`, {
+					session: p.session,
+					generation: p.generation,
+					prompt: p.id,
+					choice,
+				})
+				const step = [...l.turn.steps].reverse().find((s): s is ApprovalStep => s.kind === 'approval' && !s.resolved)
+				if (step) step.resolved = choice
+				if (l.prompt === p) {
+					l.prompt = undefined
+					l.approval = undefined
+				}
 			} catch (e) {
 				toasts.error(`Could not send the decision: ${(e as Error).message}`)
 			}
@@ -762,6 +958,7 @@ export const useSessions = defineStore('sessions', () => {
 		loadList,
 		loadMessages,
 		turnsFor,
+		statsFor,
 		byId,
 		create,
 		send,

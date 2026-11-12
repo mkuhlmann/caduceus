@@ -92,6 +92,7 @@ function retryRefresh() {
 const foreign = computed(
 	() => !botName.value && session.value?.source && !['api_server'].includes(session.value.source),
 )
+const statsOf = (turnKey: string) => (app.runStats && id.value ? sessions.statsFor(id.value, turnKey) : undefined)
 // The face beside a reply is alive only on the newest one; earlier replies show it still.
 const lastAgentKey = computed(() => [...shownTurns.value].reverse().find((t) => t.kind === 'agent')?.key)
 
@@ -584,6 +585,7 @@ async function connectThisBot() {
 									bot
 									:turn="t"
 									:status="t.live ? (liveStatus ?? botState.hint) : undefined"
+									:stats="statsOf(t.key)"
 									@approve="(c) => id && sessions.answerApproval(id, c)"
 								/>
 							</div>
@@ -591,6 +593,7 @@ async function connectThisBot() {
 								v-else
 								:turn="t"
 								:status="t.live ? liveStatus : undefined"
+								:stats="statsOf(t.key)"
 								@approve="(c) => id && sessions.answerApproval(id, c)"
 							/>
 						</template>
