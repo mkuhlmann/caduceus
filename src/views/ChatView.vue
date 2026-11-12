@@ -80,6 +80,12 @@ const skeleton = computed(() => !!id.value && !turns.value.length && sessions.is
 const fadeIn = ref(false)
 watch(skeleton, (v) => v && (fadeIn.value = true))
 const lastError = computed(() => (id.value ? sessions.lastError[id.value] : undefined))
+// A chat painted from memory or disk while its fresh copy loads, and one whose fresh copy did not come.
+const refreshing = computed(() => !!id.value && !live.value && sessions.isRefreshing(id.value))
+const refreshError = computed(() => (id.value && !refreshing.value ? sessions.refreshError[id.value] : undefined))
+function retryRefresh() {
+	if (id.value) void sessions.loadMessages(id.value, { open: true })
+}
 const foreign = computed(
 	() => !botName.value && session.value?.source && !['api_server'].includes(session.value.source),
 )
@@ -115,7 +121,7 @@ watch(
 		stickToBottom = true
 		scrollDown(true)
 		nextTick(() => composer.value?.focus())
-		if (v && !sessions.live[v]) await sessions.loadMessages(v)
+		if (v && !sessions.live[v]) await sessions.loadMessages(v, { open: true })
 		if (v !== id.value) return
 		sessions.follow(v)
 		scrollDown()
@@ -337,7 +343,24 @@ async function connectThisBot() {
 		</Transition>
 
 		<section class="flex min-w-0 flex-1 flex-col">
-			<header class="flex h-14 shrink-0 items-center gap-2 border-b border-line px-3 md:px-6">
+			<header class="relative flex h-14 shrink-0 items-center gap-2 border-b border-line px-3 md:px-6">
+				<div class="pointer-events-none absolute inset-x-0 top-full z-10 flex flex-col items-center">
+					<Transition name="fade">
+						<div v-if="refreshing" class="refresh-status w-full" role="status">
+							<div class="refresh-bar" />
+							<span class="refresh-pill mx-auto mt-2">Refreshing chat…</span>
+						</div>
+						<div
+							v-else-if="refreshError"
+							class="refresh-pill pointer-events-auto mt-2 gap-2 pr-1"
+							role="status"
+							:title="refreshError"
+						>
+							Could not refresh. Showing a saved copy.
+							<button class="btn-ghost h-6 px-2 text-xs" @click="retryRefresh">Try again</button>
+						</div>
+					</Transition>
+				</div>
 				<button
 					class="icon-btn md:hidden"
 					:aria-label="botName && !fromChats ? 'Show bots' : 'Show chats'"
@@ -597,6 +620,27 @@ async function connectThisBot() {
 </template>
 
 <style scoped>
+/* The refresh note floats over the conversation, so it never shifts the chat as it comes and goes. */
+.refresh-status {
+	display: flex;
+	flex-direction: column;
+}
+.refresh-pill {
+	display: inline-flex;
+	align-items: center;
+	border: 1px solid var(--line);
+	border-radius: 9999px;
+	background: var(--surface);
+	padding: 0.125rem 0.625rem;
+	font-size: 0.75rem;
+	color: var(--ink-3);
+	box-shadow: 0 1px 2px rgb(0 0 0 / 0.06);
+}
+/* Same 150ms grace as the refresh bar, so a quick refresh never shows its label either. */
+.refresh-status .refresh-pill {
+	animation: skeleton-in var(--dur) var(--ease-out) 150ms both;
+}
+
 /* A message the user just sent rises into place; nothing else in the list moves. */
 .turn-sent {
 	animation: turn-sent var(--dur) var(--ease-out);

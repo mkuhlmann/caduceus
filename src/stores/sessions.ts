@@ -11,6 +11,7 @@ import {
 import { buildTurns, type AgentTurn, type ApprovalStep, type ToolStep, type Turn } from '@/lib/turns'
 import { useToasts } from './toast'
 import { useProjects } from './projects'
+import { forgetTranscript, readTranscript, saveTranscript } from '@/lib/transcript-cache'
 
 type Live = {
 	runId?: string
@@ -134,6 +135,11 @@ export const useSessions = defineStore('sessions', () => {
 	// Shallow: transcripts are replaced whole, and deep proxies would make every render walk them.
 	const messages = shallowReactive<Record<string, Message[]>>({})
 	const loading = reactive<Record<string, boolean>>({})
+	// A chat on screen from memory or disk while a fresh copy loads, and one whose fresh copy failed to load.
+	const refreshing = reactive<Record<string, boolean>>({})
+	const refreshError = reactive<Record<string, string>>({})
+	// Transcripts read from disk without their inline images: the network copy always replaces them.
+	const partial = new WeakSet<Message[]>()
 	const inflight = new Map<string, Promise<void>>()
 	const recent: string[] = []
 	const live = reactive<Record<string, Live>>({})
@@ -217,25 +223,60 @@ export const useSessions = defineStore('sessions', () => {
 		}
 	}
 
-	/** Fetch a transcript; concurrent calls for the same chat share one request. Quiet ones do not toast. */
-	function loadMessages(id: string, quiet = false): Promise<void> {
+	/** Take a transcript fresh from the gateway: keep the same array when nothing changed, and save it to disk. */
+	function setTranscript(id: string, ms: Message[]) {
+		delete refreshError[id]
+		const current = messages[id]
+		if (current && !partial.has(current) && sameTranscript(current, ms)) return
+		messages[id] = ms
+		saveTranscript(id, ms)
+	}
+
+	/** Paint a chat from its copy on disk, if it is not in memory yet. */
+	async function fromDisk(id: string) {
+		if (messages[id]) return
+		const saved = await readTranscript(id)
+		if (!saved || messages[id]) return
+		if (saved.partial) partial.add(saved.messages)
+		messages[id] = saved.messages
+		touch(id)
+	}
+
+	/**
+	 * Fetch a transcript; concurrent calls for the same chat share one request. A saved copy shows first.
+	 * `open` is the chat on screen: its refresh shows as such, and a failed one keeps the copy with a note
+	 * instead of a toast. `quiet` loads never report failure.
+	 */
+	function loadMessages(id: string, opts: { quiet?: boolean; open?: boolean } = {}): Promise<void> {
 		const running = inflight.get(id)
-		if (running) return running
+		if (running) {
+			if (opts.open && messages[id]) refreshing[id] = true
+			return running
+		}
 		loading[id] = true
 		const p = (async () => {
 			try {
+				await fromDisk(id)
+				if (opts.open && messages[id]) refreshing[id] = true
 				const ms = await gateway.messages(id)
-				// Keep the same array when nothing changed, so nothing re-renders.
-				if (!sameTranscript(messages[id], ms)) messages[id] = ms
+				setTranscript(id, ms)
 				touch(id)
 				if (!byId(id)) {
 					const s = await gateway.session(id).catch(() => null)
 					if (s && !byId(id)) place(s)
 				}
 			} catch (e) {
-				if (!quiet) toasts.error(`Could not load this conversation: ${(e as Error).message}`)
+				const msg = (e as Error).message
+				// Deleted elsewhere: the saved copy is of a chat that no longer exists.
+				if ((e as { status?: number }).status === 404 && !live[id]) {
+					delete messages[id]
+					void forgetTranscript(id)
+				}
+				if (refreshing[id] && messages[id]) refreshError[id] = msg
+				else if (!opts.quiet) toasts.error(`Could not load this conversation: ${msg}`)
 			} finally {
 				delete loading[id]
+				delete refreshing[id]
 				inflight.delete(id)
 			}
 		})()
@@ -245,8 +286,13 @@ export const useSessions = defineStore('sessions', () => {
 
 	/** Warm the cache for a chat the user is about to open (hover or touch on its row). */
 	function prefetch(id: string) {
-		if (!messages[id] && !live[id]) void loadMessages(id, true)
+		if (!messages[id] && !live[id]) void loadMessages(id, { quiet: true })
 	}
+
+	/** Read the newest chats' saved copies into memory once the app is idle, so the first click paints at once. */
+	setTimeout(() => {
+		for (const s of list.value.filter((s) => !s.hidden && !s.archived).slice(0, 5)) void fromDisk(s.id)
+	}, 1500)
 
 	function hasTranscript(id: string) {
 		return !!messages[id]
@@ -254,6 +300,10 @@ export const useSessions = defineStore('sessions', () => {
 
 	function isLoading(id: string) {
 		return !!loading[id]
+	}
+
+	function isRefreshing(id: string) {
+		return !!refreshing[id]
 	}
 
 	function turnsFor(id: string): Turn[] {
@@ -504,7 +554,7 @@ export const useSessions = defineStore('sessions', () => {
 				gateway.messages(id).catch(() => null),
 			])
 			if (followed !== id || live[id] || !ms) return
-			if (!sameTranscript(messages[id], ms)) messages[id] = ms
+			setTranscript(id, ms)
 			const lastAt = Number(lastOf(ms, (m) => m.timestamp)?.timestamp ?? 0)
 			const running = runId
 				? !['completed', 'failed', 'cancelled'].includes(status?.status ?? 'running')
@@ -553,7 +603,7 @@ export const useSessions = defineStore('sessions', () => {
 		gateway
 			.messages(id)
 			.then((ms) => {
-				if (followed === id && !live[id] && !sameTranscript(messages[id], ms)) messages[id] = ms
+				if (followed === id && !live[id]) setTranscript(id, ms)
 			})
 			.catch(() => {})
 			.finally(() => poll(id))
@@ -583,6 +633,7 @@ export const useSessions = defineStore('sessions', () => {
 		list.value = list.value.filter((s) => s.id !== id)
 		delete botSessions[id]
 		delete messages[id]
+		void forgetTranscript(id)
 	}
 
 	async function fork(id: string) {
@@ -603,6 +654,8 @@ export const useSessions = defineStore('sessions', () => {
 		prefetch,
 		hasTranscript,
 		isLoading,
+		isRefreshing,
+		refreshError,
 		live,
 		lastError,
 		remote,

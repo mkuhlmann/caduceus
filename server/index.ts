@@ -9,6 +9,7 @@ import { botRoutes } from './bots'
 import { rpcRoutes } from './hermes-socket'
 import { runRoutes, trackChatStream } from './runs'
 import { embedded } from './embedded'
+import { fileResponse } from './compress'
 
 const port = Number(process.env.PORT ?? 7811)
 const host = process.env.HOST ?? '127.0.0.1'
@@ -64,20 +65,18 @@ for (const method of ['GET', 'POST', 'PUT', 'PATCH', 'DELETE']) {
 	)
 	app.route(method, '/ui-api/dash/*', ({ request, params }) => relay('dash', '/' + params['*'], request))
 }
-app.get('/*', ({ params }) => serveStatic(params['*']))
+app.get('/*', ({ params, request }) => serveStatic(params['*'], request))
 
-function serveStatic(path: string) {
+function serveStatic(path: string, req: Request) {
 	if (!embedded.size && !existsSync(distDir))
 		return new Response('Frontend not built. Run `bun run build`.', { status: 404 })
 	const file = embedded.size ? embedded.get(path) : diskFile(path)
 	if (file) {
 		const immutable = path.startsWith('assets/')
-		return new Response(Bun.file(file), {
-			headers: immutable ? { 'Cache-Control': 'public, max-age=31536000, immutable' } : {},
-		})
+		return fileResponse(file, req, immutable ? { 'Cache-Control': 'public, max-age=31536000, immutable' } : {})
 	}
 	const index = embedded.get('index.html') ?? join(distDir, 'index.html')
-	return new Response(Bun.file(index), { headers: { 'Cache-Control': 'no-cache' } })
+	return fileResponse(index, req, { 'Cache-Control': 'no-cache' })
 }
 
 function diskFile(path: string) {

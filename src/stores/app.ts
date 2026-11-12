@@ -1,6 +1,7 @@
 import { defineStore } from 'pinia'
 import { ref, watchEffect } from 'vue'
 import { get, put, post } from '@/lib/http'
+import { setTranscriptScope } from '@/lib/transcript-cache'
 
 export type ConnectionInfo = {
 	gatewayUrl: string
@@ -55,6 +56,7 @@ export const useApp = defineStore('app', () => {
 			return
 		}
 		connection.value = await get('ui-api/connection')
+		setTranscriptScope(connection.value?.gatewayUrl ?? '')
 		// Assume the last known state so the UI paints at once; the probe corrects it.
 		const cached = JSON.parse(localStorage.getItem('caduceus.probe') ?? 'null')
 		if (cached) {
@@ -78,6 +80,7 @@ export const useApp = defineStore('app', () => {
 
 	async function save(c: Partial<ConnectionInfo>) {
 		connection.value = await put('ui-api/connection', c)
+		setTranscriptScope(connection.value?.gatewayUrl ?? '')
 		return test()
 	}
 

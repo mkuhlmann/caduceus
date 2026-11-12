@@ -1,6 +1,7 @@
 import { getConnection, onConnectionChange, type Connection } from './config'
 import { isChatStream } from './runs'
 import { botKey } from './bots'
+import { finishJson } from './compress'
 
 /** `/p/<profile>/…`: a request for one bot (a Hermes profile) on the multiplexed gateway. */
 const BOT_PATH = /^\/p\/([^/]+)\//
@@ -26,6 +27,9 @@ const HOP_BY_HOP = new Set([
 	'referer',
 	'content-length',
 	'accept-encoding',
+	// Validators belong to the relay, which tags answers itself (compress.ts); Hermes keeps none.
+	'if-none-match',
+	'if-modified-since',
 	'authorization',
 	'x-hermes-session-token',
 ])
@@ -209,6 +213,7 @@ export async function relay(target: 'gw' | 'dash', path: string, req: Request): 
 	if ((out.get('content-type') ?? '').includes('text/event-stream')) {
 		out.set('Cache-Control', 'no-cache')
 		out.set('X-Accel-Buffering', 'no')
+		return new Response(res.body, { status: res.status, statusText: res.statusText, headers: out })
 	}
-	return new Response(res.body, { status: res.status, statusText: res.statusText, headers: out })
+	return finishJson(req, res, out)
 }

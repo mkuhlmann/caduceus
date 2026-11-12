@@ -242,7 +242,7 @@ export const useBots = defineStore('bots', () => {
 		delete chats[name]
 		await findChat(name)
 		const next = chats[name]?.id
-		if (next) await sessions.loadMessages(next, true)
+		if (next) await sessions.loadMessages(next, { quiet: true })
 		return r
 	}
 
