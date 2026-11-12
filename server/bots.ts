@@ -4,6 +4,7 @@ import { join, dirname } from 'node:path'
 import { randomBytes } from 'node:crypto'
 import { relay } from './relay'
 import { rpc, RpcError, viewerSupport } from './hermes-socket'
+import { faceColor } from './face-color'
 
 /**
  * Hermes bots are profiles. The dashboard creates and deletes them; the multiplexed gateway serves each one under
@@ -154,6 +155,30 @@ function cleanLook(v: any): BotLook | null {
 	return { shape: s(v.shape), color: s(v.color) }
 }
 
+/** Whether the bot has a drawn face from Hermes and no face chosen in Caduceus, so its colour is worth reading. */
+const wantsFaceColor = (p: HermesProfile) =>
+	!!p.has_avatar && p.ui_meta?.[BOTS_KEY]?.imageKind !== 'photo' && !p.ui_meta?.[OWN_KEY]?.look
+
+const FACE_TTL = 10 * 60_000
+const faceColors = new Map<string, { color: string | null; at: number }>()
+
+/** The main colour of each such bot's drawn face, read once and kept for a while. */
+async function readFaceColors(list: HermesProfile[]) {
+	await Promise.all(
+		list.filter(wantsFaceColor).map(async (p) => {
+			const hit = faceColors.get(p.name)
+			if (hit && Date.now() - hit.at < FACE_TTL) return
+			try {
+				const r = await rpc<{ found?: boolean; data?: string }>('profiles.get_asset', { name: p.name, asset: 'avatar' })
+				const color = r.found && r.data ? faceColor(Buffer.from(r.data.replace(/^data:[^,]*,/, ''), 'base64')) : null
+				faceColors.set(p.name, { color, at: Date.now() })
+			} catch {
+				// No colour this time; the face falls back to the generated one.
+			}
+		}),
+	)
+}
+
 function publicBot(p: HermesProfile) {
 	const meta = p.ui_meta?.[BOTS_KEY] ?? {}
 	const own = p.ui_meta?.[OWN_KEY] ?? {}
@@ -168,6 +193,8 @@ function publicBot(p: HermesProfile) {
 		title: String(meta.title ?? ''),
 		look: cleanLook(own.look),
 		image: photo ? `ui-api/bots/${encodeURIComponent(p.name)}/avatar?v=${rev}` : null,
+		// Hermes' drawn face's colour, for a bot with no face chosen here: Caduceus draws its own in the nearest colour.
+		faceColor: wantsFaceColor(p) ? (faceColors.get(p.name)?.color ?? null) : null,
 		hidden: !!meta.hidden,
 		pinned: !!meta.pinned,
 		sectionId: meta.sectionId ?? null,
@@ -226,6 +253,7 @@ async function connect(name: string) {
 async function one(name: string) {
 	const p = (await profiles()).find((x) => x.name === name)
 	if (!p) throw new BotError(404, `Hermes has no bot named ${name}.`)
+	await readFaceColors([p])
 	return publicBot(p)
 }
 
@@ -252,6 +280,7 @@ async function applyEdit(name: string, body: any) {
 	if ('image' in body) {
 		const image = body.image === '' ? null : body.image
 		await setPicture(name, image)
+		faceColors.delete(name)
 		bots.imageKind = image ? 'photo' : null
 		bots.custom = true
 	}
@@ -316,6 +345,7 @@ export const botRoutes = new Elysia({ prefix: '/ui-api/bots' })
 		try {
 			const list = await profiles()
 			void settle(list)
+			await readFaceColors(list)
 			return list.map(publicBot)
 		} catch (e) {
 			return fail(set, e)

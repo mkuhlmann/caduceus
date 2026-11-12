@@ -193,6 +193,37 @@ function luminance(hex: string) {
 	return 0.2126 * r! + 0.7152 * g! + 0.0722 * b!
 }
 
+/** sRGB hex to OKLab, where straight-line distance tracks how different two colours look. */
+function oklab(hex: string): [number, number, number] {
+	const [r, g, b] = [1, 3, 5].map((i) => {
+		const c = parseInt(hex.slice(i, i + 2), 16) / 255
+		return c <= 0.04045 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4
+	}) as [number, number, number]
+	const l = Math.cbrt(0.4122214708 * r + 0.5363325363 * g + 0.0514459929 * b)
+	const m = Math.cbrt(0.2119034982 * r + 0.6806995451 * g + 0.1073969566 * b)
+	const s = Math.cbrt(0.0883024619 * r + 0.2817188376 * g + 0.6299787005 * b)
+	return [
+		0.2104542553 * l + 0.793617785 * m - 0.0040720468 * s,
+		1.9779984951 * l - 2.428592205 * m + 0.4505937099 * s,
+		0.0259040371 * l + 0.7827717662 * m - 0.808675766 * s,
+	]
+}
+
+/** The body colour that looks closest to any colour, e.g. the one Hermes drew a bot's face in. */
+export function nearestColor(hex: string): string {
+	if (!/^#[0-9a-f]{6}$/i.test(hex)) return 'violet'
+	const [l, a, b] = oklab(hex)
+	let best = 'violet'
+	let bestDistance = Infinity
+	for (const [name, value] of Object.entries(COLORS)) {
+		const [l2, a2, b2] = oklab(value)
+		// One shade per hue here, so hue and colourfulness count for more than lightness.
+		const d = 0.3 * (l - l2) ** 2 + (a - a2) ** 2 + (b - b2) ** 2
+		if (d < bestDistance) [best, bestDistance] = [name, d]
+	}
+	return best
+}
+
 /** The face a name gets when nobody chose one. */
 export function generatedLook(name: string): BotLook {
 	const s = seedOf(name)

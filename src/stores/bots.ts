@@ -4,7 +4,7 @@ import { dashboard, type Profile } from '@/lib/dashboard'
 import { BOT_CHAT_TITLE, gateway, gwFor, setSessionProfile, type Session } from '@/lib/gateway'
 import { get, patch, post, del, qs } from '@/lib/http'
 import { prettyToolName } from '@/lib/turns'
-import type { BotLook, BotState } from '@/lib/avatar'
+import { nearestColor, type BotLook, type BotState } from '@/lib/avatar'
 import { useSessions } from './sessions'
 
 /** A bot's metadata as Hermes stores it (`ui_meta`, shared with Hermes Desktop), plus whether Caduceus holds its key. */
@@ -14,6 +14,8 @@ type BotMeta = {
 	look: BotLook | null
 	/** URL of the bot's picture, or a data URL right after picking one. */
 	image: string | null
+	/** For a bot with no face chosen here: the colour of the face Hermes drew for it. */
+	faceColor?: string | null
 	hidden: boolean
 	pinned: boolean
 	sectionId: string | null
@@ -113,7 +115,8 @@ export const useBots = defineStore('bots', () => {
 				model: p.model ?? '',
 				provider: p.provider ?? '',
 				isDefault,
-				look: m?.look ?? null,
+				// No face chosen here: take the colour of the one Hermes drew, so the bot looks the same in both.
+				look: m?.look ?? (m?.faceColor ? { shape: '', color: nearestColor(m.faceColor) } : null),
 				image: m?.image ?? null,
 				connected: isDefault || !!m?.connected,
 				skillCount: p.skill_count ?? 0,
