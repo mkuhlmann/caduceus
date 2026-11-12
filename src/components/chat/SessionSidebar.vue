@@ -7,19 +7,26 @@ import { useProjects, PROJECT_COLORS } from '@/stores/projects'
 import { dayGroup } from '@/lib/time'
 import type { Session } from '@/lib/gateway'
 import SessionMenu from './SessionMenu.vue'
+import BotBento from './BotBento.vue'
+import { useBots } from '@/stores/bots'
 
 const props = defineProps<{ activeId?: string }>()
 const emit = defineEmits<{ navigate: [] }>()
 const sessions = useSessions()
 const projects = useProjects()
+const bots = useBots()
 const router = useRouter()
 const filter = ref('')
 const menuFor = ref<string | null>(null)
 
 const groups = computed(() => {
 	const q = filter.value.trim().toLowerCase()
+	// Hermes' own Bot Chat is its tile above the list, so it is not listed twice.
+	const botChat = bots.chats.default?.id
 	const rows = sessions.visible.filter(
-		(s) => !q || (s.title ?? '').toLowerCase().includes(q) || (s.preview ?? '').toLowerCase().includes(q),
+		(s) =>
+			s.id !== botChat &&
+			(!q || (s.title ?? '').toLowerCase().includes(q) || (s.preview ?? '').toLowerCase().includes(q)),
 	)
 	const out: { label: string; items: Session[] }[] = []
 	const pinned = rows.filter((s) => s.pinned)
@@ -71,6 +78,7 @@ function newChat() {
 			<Search :size="15" class="pointer-events-none absolute top-2.5 left-5.5 text-ink-3" />
 			<input v-model="filter" class="field pl-8" placeholder="Filter chats" aria-label="Filter chats" />
 		</div>
+		<BotBento :filter="filter" @navigate="emit('navigate')" />
 
 		<div class="min-h-0 flex-1 overflow-y-auto px-2 pb-4">
 			<p v-if="sessions.listError" class="px-2 py-3 text-sm text-rose">{{ sessions.listError }}</p>
