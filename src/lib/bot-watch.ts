@@ -17,12 +17,14 @@ const READY_MS = 5000
 
 /**
  * View a bot's Bot Chat live through the relay, as Hermes Desktop does. Resolves once the relay is attached, or
- * null when the connection cannot view a running chat (a standalone dashboard) or the attach failed.
+ * null when the connection cannot view a running chat (a standalone dashboard) or the attach failed. `onEnd` is
+ * told when the view ends without `close()`: the relay lost Hermes' socket.
  */
 export async function watchBotChat(
 	profile: string,
 	sessionId: string,
 	onEvent: (e: WatchEvent) => void,
+	onEnd?: () => void,
 ): Promise<BotWatch | null> {
 	const abort = new AbortController()
 	const timer = setTimeout(() => abort.abort(), READY_MS)
@@ -45,8 +47,9 @@ export async function watchBotChat(
 					onEvent({ type: f.event, payload: d.payload ?? d, generation: d.generation ?? null })
 				}
 			} catch {
-				// Closed: the turn's end arrives with the chat's own stream either way.
+				// Closed: a turn sent from here still ends with the chat's own stream.
 			}
+			if (!abort.signal.aborted) onEnd?.()
 		})()
 		return {
 			session: ready.session,

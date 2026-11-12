@@ -9,7 +9,7 @@ import {
 	type Message,
 	type Session,
 } from '@/lib/gateway'
-import { buildTurns, savedProgress, type AgentTurn, type ApprovalStep, type ToolStep, type Turn } from '@/lib/turns'
+import { buildTurns, savedProgress, type AgentTurn, type ApprovalStep, type Turn } from '@/lib/turns'
 import { useToasts } from './toast'
 import { useProjects } from './projects'
 import { forgetTranscript, readTranscript, saveTranscript } from '@/lib/transcript-cache'
@@ -17,6 +17,7 @@ import { fetchOlder, fetchTail, LIVE_TAIL, mergeTail, prependOlder, TAIL, type T
 import { onRpcEvent } from '@/lib/rpc'
 import { watchBotChat, type BotWatch, type WatchEvent } from '@/lib/bot-watch'
 import { post } from '@/lib/http'
+import { TurnWriter } from '@/lib/turn-writer'
 import { counters, RunClock, savedStats, saveStats, turnStats, turnTokens, type RunStats } from '@/lib/run-stats'
 import { useApp } from './app'
 
@@ -87,6 +88,16 @@ function turnsOf(ms: Message[]) {
 	let t = turnCache.get(ms)
 	if (!t) turnCache.set(ms, (t = buildTurns(ms)))
 	return t
+}
+
+// A transcript up to one message, while the turn after it shows live; kept per transcript array like its turns.
+const cutCache = new WeakMap<Message[], { at: number; ms: Message[] }>()
+function upTo(ms: Message[], at: number) {
+	const c = cutCache.get(ms)
+	if (c?.at === at) return c.ms
+	const cut = ms.filter((m) => !(Number(m.id) > at))
+	cutCache.set(ms, { at, ms: cut })
+	return cut
 }
 
 function lastOf<T>(xs: T[], ok: (x: T) => unknown) {
@@ -382,13 +393,18 @@ export const useSessions = defineStore('sessions', () => {
 	}
 
 	function turnsFor(id: string): Turn[] {
-		const all = turnsOf(messages[id] ?? [])
+		const bt = live[id] ? undefined : botTurns[id]
+		const all = turnsOf(bt?.after !== undefined ? upTo(messages[id] ?? [], bt.after) : (messages[id] ?? []))
 		// A page can start in the middle of the agent's work; that turn shows once its start is loaded.
 		const turns = older[id] && all[0]?.kind === 'agent' && all.length > 1 ? all.slice(1) : [...all]
 		const l = live[id]
 		if (l) {
 			turns.push({ kind: 'user', key: 'live-user', text: l.user.text, images: l.user.images })
 			turns.push(l.turn)
+			return turns
+		}
+		if (bt) {
+			turns.push(bt.turn)
 			return turns
 		}
 		const r = remote[id]
@@ -441,13 +457,14 @@ export const useSessions = defineStore('sessions', () => {
 		const clock = useApp().runStats ? new RunClock() : null
 		const before = clock ? gateway.session(id).then(counters, () => null) : null
 		let usage: { input_tokens?: number; output_tokens?: number } | undefined
+		const writer = new TurnWriter(turn, clock)
 
 		// A bot's Bot Chat runs in the bot's own queue, and its stream reports nothing until the reply is done.
 		// Where Hermes lets a socket view the chat, the turn streams from there (`onWatch` below). Otherwise it is
 		// filled in from the steps Hermes saves as it goes, until the stream says more.
-		const botChat = byId(id)?.title === BOT_CHAT_TITLE
 		const profile = sessionProfile(id) ?? 'default'
-		let watch: BotWatch | null = null
+		let ownWatch: BotWatch | null = null
+		let watchSession = ''
 		let streamed = false
 		let savedTimer: ReturnType<typeof setTimeout> | undefined
 		const heldIds = (messages[id] ?? []).map((m) => Number(m.id)).filter(Number.isFinite)
@@ -468,132 +485,40 @@ export const useSessions = defineStore('sessions', () => {
 			}
 			if (live[id] === l && !streamed) savedTimer = setTimeout(watchSaved, SAVED_MS)
 		}
-
-		// Tokens arrive faster than the screen refreshes. Collect them and apply them once per frame, so a
-		// streaming reply re-renders at most once per frame however fast the model writes.
-		let written = ''
-		let thought = ''
-		let frame = 0
-		const flush = () => {
-			cancelAnimationFrame(frame)
-			frame = 0
-			if (written) {
-				const last = turn.steps.at(-1)
-				if (last?.kind === 'text') last.text += written
-				else {
-					const t = written.replace(/^\s+/, '')
-					if (t) turn.steps.push({ kind: 'text', text: t })
-				}
-				written = ''
-			}
-			if (thought) {
-				turn.reasoning += thought
-				thought = ''
-			}
-		}
-		const later = () => {
-			if (!frame) frame = requestAnimationFrame(flush)
-		}
-
-		// A turn already running when the watch began is someone else's: this message waits behind it.
-		let otherTurn: number | null = null
 		const onWatch = (ev: WatchEvent) => {
-			if (live[id] !== l || (otherTurn !== null && ev.generation === otherTurn)) return
-			const p = ev.payload ?? {}
-			const text = typeof p.text === 'string' ? p.text : ''
+			if (live[id] !== l) return
 			streamed = true
-			switch (ev.type) {
-				case 'message.start':
-					clock?.turnStarted()
-					return
-				case 'message.delta':
-					if (!text) return
-					clock?.output()
-					written += text
-					return later()
-				case 'thinking.delta':
-					// Hermes' spinner line ("reasoning..."), not what the model thinks.
-					return
-				case 'reasoning.delta':
-					if (!text) return
-					clock?.output(true)
-					thought += text
-					return later()
-				case 'reasoning.available':
-					// A finished block, from a model that does not stream its reasoning.
-					if (text && !thought && !turn.reasoning.endsWith(text)) {
-						clock?.output()
-						thought += (turn.reasoning ? '\n\n' : '') + text
-						later()
-					}
-					return
+			const o = writer.apply(ev)
+			if (o.status) l.status = o.status
+			if (o.prompt) {
+				const { generation, id: promptId, command, description, choices } = o.prompt
+				l.prompt = { profile, session: watchSession, generation, id: promptId }
+				l.approval = { run_id: '', command, description, choices }
 			}
-			flush()
-			switch (ev.type) {
-				case 'message.interim':
-					if (text && !p.already_streamed) {
-						clock?.output()
-						turn.steps.push({ kind: 'text', text })
-					}
-					break
-				case 'tool.start':
-					clock?.toolStarted()
-					turn.steps.push({
-						kind: 'tool',
-						id: p.tool_id ?? p.tool_call_id,
-						name: p.name ?? p.tool_name ?? 'tool',
-						preview: p.context ?? null,
-						args: p.args && typeof p.args === 'object' ? p.args : null,
-						status: 'running',
-					})
-					break
-				case 'tool.complete': {
-					clock?.toolDone()
-					const tid = p.tool_id ?? p.tool_call_id
-					const step = [...turn.steps]
-						.reverse()
-						.find(
-							(s): s is ToolStep =>
-								s.kind === 'tool' && s.status === 'running' && (tid ? s.id === tid : s.name === p.name),
-						)
-					if (step) {
-						step.status = p.is_error ? 'failed' : 'done'
-						if (typeof p.result_text === 'string') step.output = p.result_text
-						else if (typeof p.result === 'string') step.output = p.result
-					}
-					break
-				}
-				case 'status.update':
-					if (text) l.status = text
-					break
-				case 'approval.request': {
-					const generation = ev.generation ?? p.execution_generation
-					if (!watch || typeof generation !== 'number' || !p.prompt_id) break
-					const choices: string[] = p.choices ?? ['once', 'session', 'always', 'deny']
-					l.prompt = { profile, session: watch.session, generation, id: p.prompt_id }
-					l.approval = { run_id: '', command: p.command, description: p.description, choices }
-					turn.steps.push({ kind: 'approval', command: p.command, description: p.description, choices })
-					break
-				}
-				case 'approval.settled':
-					if (l.prompt?.id !== p.prompt_id) break
-					// Answered somewhere else (Hermes Desktop, another tab) or run out: this one no longer can.
-					for (const s of turn.steps) if (s.kind === 'approval' && !s.resolved) s.resolved = 'elsewhere'
-					l.prompt = undefined
-					l.approval = undefined
-					break
-				case 'session.replay_gap':
-					// The view fell behind and Hermes dropped it: read the saved steps instead.
-					watch?.close()
-					streamed = false
-					savedTimer = setTimeout(watchSaved, SAVED_MS)
-					break
+			if (o.settled && l.prompt?.id === o.settled) {
+				// Answered somewhere else (Hermes Desktop, another tab) or run out: this one no longer can.
+				writer.resolve('elsewhere')
+				l.prompt = undefined
+				l.approval = undefined
+			}
+			if (o.gap) {
+				// The view fell behind and Hermes dropped it: read the saved steps instead.
+				streamed = false
+				savedTimer = setTimeout(watchSaved, SAVED_MS)
 			}
 		}
-		if (botChat) {
-			watch = await watchBotChat(profile, id, onWatch)
-			if (watch?.running) otherTurn = watch.generation
-			if (!watch) savedTimer = setTimeout(watchSaved, SAVED_MS)
+		const shared = botViews[id]
+		if (shared) {
+			// The open chat is watched already. A turn running as this is sent (another bot's message, a routine) is
+			// not this one: this message waits behind it, and that turn keeps its own place.
+			watchSession = shared.watch.session
+			shared.route = { skip: botTurns[id]?.generation ?? null, handle: onWatch }
+		} else if (isBotChat(id)) {
+			let skip: number | null = null
+			ownWatch = await watchBotChat(profile, id, (ev) => (skip === null || ev.generation !== skip) && onWatch(ev))
+			if (ownWatch?.running) skip = ownWatch.generation
+			watchSession = ownWatch?.session ?? ''
+			if (!ownWatch) savedTimer = setTimeout(watchSaved, SAVED_MS)
 		}
 
 		try {
@@ -606,51 +531,32 @@ export const useSessions = defineStore('sessions', () => {
 					}
 					streamed = true
 				}
-				if (ev.type === 'assistant.delta') {
-					clock?.output()
-					written += ev.delta
-					later()
-					continue
-				}
-				if (ev.type === 'reasoning') {
-					// A finished block, not a stream: the reasoning was written before it arrived.
-					clock?.output()
-					thought += ev.delta
-					later()
-					continue
-				}
-				// Anything else lands after the text before it.
-				flush()
 				switch (ev.type) {
+					case 'assistant.delta':
+						writer.text(ev.delta)
+						break
+					case 'reasoning':
+						// A finished block, not a stream: the reasoning was written before it arrived.
+						writer.reasoning(ev.delta, false)
+						break
+					case 'assistant.commentary':
+						writer.commentary(ev.text)
+						break
+					case 'tool.started':
+						writer.toolStarted({ name: ev.tool, preview: ev.preview, args: (ev.args as any) ?? null })
+						break
+					case 'tool.completed':
+						writer.toolDone({ name: ev.tool }, ev.failed)
+						break
 					case 'run.started':
+						writer.flush()
 						l.runId = ev.run_id
 						if (l.stopRequested) gateway.stopRun(ev.run_id, id).catch(() => l.abort.abort())
 						// Hermes names the chat from the message as the run starts.
 						setTimeout(() => refreshSession(id, true), 1500)
 						break
-					case 'assistant.commentary':
-						clock?.output()
-						turn.steps.push({ kind: 'text', text: ev.text })
-						break
-					case 'tool.started':
-						clock?.toolStarted()
-						turn.steps.push({
-							kind: 'tool',
-							name: ev.tool,
-							preview: ev.preview,
-							args: (ev.args as any) ?? null,
-							status: 'running',
-						})
-						break
-					case 'tool.completed': {
-						clock?.toolDone()
-						const step = [...turn.steps]
-							.reverse()
-							.find((s): s is ToolStep => s.kind === 'tool' && s.name === ev.tool && s.status === 'running')
-						if (step) step.status = ev.failed ? 'failed' : 'done'
-						break
-					}
 					case 'approval.request': {
+						writer.flush()
 						l.approval = ev.request
 						const step: ApprovalStep = {
 							kind: 'approval',
@@ -665,10 +571,12 @@ export const useSessions = defineStore('sessions', () => {
 						l.status = ev.text
 						break
 					case 'run.finished':
+						writer.flush()
 						if (ev.status === 'failed') turn.error = ev.error || 'The run failed.'
 						if (ev.status === 'completed') usage = ev.usage
 						break
 					case 'error':
+						writer.flush()
 						turn.error = ev.message
 						break
 				}
@@ -682,9 +590,15 @@ export const useSessions = defineStore('sessions', () => {
 						: err.message
 			}
 		} finally {
-			flush()
+			writer.flush()
 			clearTimeout(savedTimer)
-			watch?.close()
+			ownWatch?.close()
+			const view = botViews[id]
+			if (view?.route?.handle === onWatch) {
+				// Late events of this turn are not a new one.
+				if (view.route.gen !== undefined) view.done.add(view.route.gen)
+				view.route = undefined
+			}
 			const timing = clock?.finish()
 			// Read off saved steps, the turn has no timing of its own to split into reading and writing.
 			if (timing && !streamed) timing.promptMs = timing.genMs = timing.toolMs = undefined
@@ -705,6 +619,138 @@ export const useSessions = defineStore('sessions', () => {
 					recordStats(`${id}:${last.key}`, turnStats(timing, turnTokens(await before, counters(byId(id)), usage)))
 			}
 		}
+	}
+
+	/**
+	 * The open Bot Chat stays watched on the Hermes socket (where the connection can view one), so a turn that did
+	 * not start here shows live too: another bot's message, a routine, a turn already running when the page loaded.
+	 * A turn sent from here takes the events of its own run through `route`.
+	 */
+	type BotView = {
+		watch: BotWatch
+		route?: { skip: number | null; handle: (ev: WatchEvent) => void; gen?: number }
+		/** Turns that ended: their late events start nothing. */
+		done: Set<number>
+	}
+	type BotTurn = {
+		turn: AgentTurn
+		writer: TurnWriter
+		generation: number | null
+		/** The newest message saved before the turn's own: the transcript shows up to it while the turn runs. */
+		after?: number
+		status?: string
+		prompt?: Live['prompt']
+	}
+	const botViews: Record<string, BotView> = {}
+	const botTurns = reactive<Record<string, BotTurn>>({})
+
+	function isBotChat(id: string) {
+		return byId(id)?.title === BOT_CHAT_TITLE
+	}
+
+	async function watchBot(id: string) {
+		if (botViews[id] || !isBotChat(id) || useApp().liveBots === false) return
+		const profile = sessionProfile(id) ?? 'default'
+		let view: BotView | undefined
+		const w = await watchBotChat(
+			profile,
+			id,
+			(ev) => view && onBotEvent(id, view, ev),
+			() => {
+				// The relay lost Hermes' socket: attach again while the chat is open.
+				if (!view || botViews[id] !== view) return
+				delete botViews[id]
+				void finishBotTurn(id)
+				setTimeout(() => followed === id && watchBot(id), 2000)
+			},
+		)
+		if (!w) return
+		if (followed !== id || botViews[id]) return w.close()
+		view = { watch: w, done: new Set() }
+		botViews[id] = view
+		if (w.running && !live[id]) startBotTurn(id, w.generation, true)
+	}
+
+	function unwatchBot(id: string) {
+		const view = botViews[id]
+		if (!view) return
+		delete botViews[id]
+		view.watch.close()
+		delete botTurns[id]
+	}
+
+	function onBotEvent(id: string, view: BotView, ev: WatchEvent) {
+		if (botViews[id] !== view) return
+		const r = view.route
+		if (r && (r.skip === null || ev.generation !== r.skip)) {
+			if (ev.generation !== null) r.gen = ev.generation
+			return r.handle(ev)
+		}
+		if (ev.generation !== null && view.done.has(ev.generation)) return
+		let bt = botTurns[id]
+		if (!bt || (ev.generation !== null && bt.generation !== null && ev.generation !== bt.generation)) {
+			if (bt) void finishBotTurn(id)
+			bt = startBotTurn(id, ev.generation, false)
+		}
+		const o = bt.writer.apply(ev)
+		if (o.status) bt.status = o.status
+		if (o.prompt)
+			bt.prompt = {
+				profile: sessionProfile(id) ?? 'default',
+				session: view.watch.session,
+				generation: o.prompt.generation,
+				id: o.prompt.id,
+			}
+		if (o.settled && bt.prompt?.id === o.settled) {
+			bt.writer.resolve('elsewhere')
+			bt.prompt = undefined
+		}
+		if (o.complete || o.gap) void finishBotTurn(id)
+	}
+
+	function startBotTurn(id: string, generation: number | null, midway: boolean): BotTurn {
+		const turn = reactive<AgentTurn>({ kind: 'agent', key: 'remote-agent', steps: [], reasoning: '', live: true })
+		const bt = reactive({ turn, writer: new TurnWriter(turn), generation }) as BotTurn
+		botTurns[id] = bt
+		// Bring the chat up to the turn's start: the message that began it is saved by now. A turn joined midway has
+		// saved its first steps too; those are shown from the copy, and the transcript stops before them.
+		refreshTail(id, { limit: LIVE_TAIL })
+			.then(() => {
+				if (botTurns[id] !== bt) return
+				const ms = messages[id] ?? []
+				if (!midway) {
+					bt.after = Number(ms.at(-1)?.id ?? NaN)
+					return
+				}
+				bt.after = Number(lastOf(ms, (m) => m.role === 'user')?.id ?? NaN)
+				const p = Number.isFinite(bt.after) ? savedProgress(ms, bt.after!) : null
+				if (p && !turn.steps.length && !turn.reasoning) {
+					turn.steps = p.steps
+					turn.reasoning = p.reasoning
+				}
+			})
+			.catch(() => {})
+		return bt
+	}
+
+	async function finishBotTurn(id: string) {
+		const bt = botTurns[id]
+		if (!bt) return
+		bt.writer.flush()
+		if (bt.generation !== null) botViews[id]?.done.add(bt.generation)
+		// The turn stays on screen until the transcript that replaces it is here.
+		await loadMessages(id, { quiet: true })
+		if (botTurns[id] === bt) delete botTurns[id]
+		await settle(id)
+	}
+
+	async function respondOnSocket(p: NonNullable<Live['prompt']>, choice: string) {
+		await post(`ui-api/bots/${encodeURIComponent(p.profile)}/approval`, {
+			session: p.session,
+			generation: p.generation,
+			prompt: p.id,
+			choice,
+		})
 	}
 
 	function recordStats(key: string, stats: RunStats) {
@@ -758,15 +804,22 @@ export const useSessions = defineStore('sessions', () => {
 			}
 			return
 		}
+		const bt = botTurns[id]
+		if (!l && bt?.prompt) {
+			const p = bt.prompt
+			try {
+				await respondOnSocket(p, choice)
+				bt.writer.resolve(choice)
+				if (bt.prompt === p) bt.prompt = undefined
+			} catch (e) {
+				toasts.error(`Could not send the decision: ${(e as Error).message}`)
+			}
+			return
+		}
 		if (l?.prompt) {
 			const p = l.prompt
 			try {
-				await post(`ui-api/bots/${encodeURIComponent(p.profile)}/approval`, {
-					session: p.session,
-					generation: p.generation,
-					prompt: p.id,
-					choice,
-				})
+				await respondOnSocket(p, choice)
 				const step = [...l.turn.steps].reverse().find((s): s is ApprovalStep => s.kind === 'approval' && !s.resolved)
 				if (step) step.resolved = choice
 				if (l.prompt === p) {
@@ -799,16 +852,23 @@ export const useSessions = defineStore('sessions', () => {
 
 	function follow(id?: string) {
 		clearTimeout(followTimer)
-		if (followed && followed !== id) delete remote[followed]
+		if (followed && followed !== id) {
+			delete remote[followed]
+			unwatchBot(followed)
+		}
 		followed = id
-		if (id) followTimer = setTimeout(() => poll(id), 0)
+		if (id) {
+			followTimer = setTimeout(() => poll(id), 0)
+			void watchBot(id)
+		}
 	}
 
 	/** `changed`: Hermes reported a write, so read the chat even when nothing seems to be running in it. */
 	async function poll(id: string, changed = false) {
 		let next = IDLE_MS
 		try {
-			if (followed !== id || document.hidden || live[id]) return
+			// A turn watched on the Hermes socket brings its own steps; its transcript is read when it ends.
+			if (followed !== id || document.hidden || live[id] || botTurns[id]) return
 			await syncRuns()
 			const runId = activeRuns.value[id]
 			const stale = !runId && !unfinished(messages[id] ?? [])
@@ -951,6 +1011,7 @@ export const useSessions = defineStore('sessions', () => {
 		isLoadingOlder,
 		loadOlder,
 		live,
+		botTurns,
 		lastError,
 		remote,
 		activeRuns,

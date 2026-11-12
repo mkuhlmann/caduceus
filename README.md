@@ -127,7 +127,7 @@ A bot's chat does not run like other chats. Hermes hands each message to the bot
 
 With the standalone dashboard, Caduceus shows a bot's work as Hermes saves it: reasoning, tool steps and text appear every couple of seconds, not word by word. Approvals that a bot's turn asks for do not reach Caduceus; answer them in Hermes Desktop, or they run into Hermes' timeout.
 
-Pointed at the dashboard the gateway hosts, Caduceus watches a bot's turn as Hermes Desktop does: reasoning, tool steps and the reply stream in as they happen, and approvals show in the chat with their buttons. Set `HERMES_DASHBOARD_URL` to that address; everything else Caduceus reads from the dashboard is served there too.
+Pointed at the dashboard the gateway hosts, Caduceus watches an open bot's chat as Hermes Desktop does: reasoning, tool steps and the reply stream in as they happen, whoever started the turn (you, another bot, a routine), and approvals show in the chat with their buttons. Set `HERMES_DASHBOARD_URL` to that address; everything else Caduceus reads from the dashboard is served there too.
 
 That dashboard is the Webapp (Hermes Desktop in a browser). It is off by default and is turned on in Hermes' `config.yaml`; see [Running the Webapp](https://github.com/NousResearch/hermes-agent/blob/main/website/docs/user-guide/docker.md#running-the-webapp) in the Hermes docs:
 

@@ -28,7 +28,12 @@ const totalTitle = computed(() => {
 	const s = props.stats
 	const calls = s.calls ? ` across ${s.calls} model ${s.calls === 1 ? 'call' : 'calls'}` : ''
 	const tools = s.toolMs ? `, ${fmtTime(s.toolMs)} of it running tools` : ''
-	return `From sending the message to the end of the reply${calls}${tools}`
+	// No reading speed shown: say why.
+	const cache =
+		pp.value === undefined && s.cachedTokens
+			? `. Nearly all of the prompt came from the cache (${s.cachedTokens.toLocaleString()} tokens, ${(s.promptTokens ?? 0).toLocaleString()} read fresh), so there is no reading speed to show`
+			: ''
+	return `From sending the message to the end of the reply${calls}${tools}${cache}`
 })
 </script>
 

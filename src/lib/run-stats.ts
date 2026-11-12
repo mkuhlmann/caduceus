@@ -20,9 +20,14 @@ export type RunStats = {
 }
 
 const MIN_MS = 50
+// Below this many freshly read prompt tokens (the rest came from the cache), the wait before the reply is mostly
+// latency, and a rate would say nothing about how fast the model reads.
+const MIN_PROMPT = 1000
 
 export function ppRate(s: RunStats) {
-	return s.promptTokens && s.promptMs && s.promptMs >= MIN_MS ? (s.promptTokens / s.promptMs) * 1000 : undefined
+	return s.promptTokens && s.promptTokens >= MIN_PROMPT && s.promptMs && s.promptMs >= MIN_MS
+		? (s.promptTokens / s.promptMs) * 1000
+		: undefined
 }
 
 export function tgRate(s: RunStats) {

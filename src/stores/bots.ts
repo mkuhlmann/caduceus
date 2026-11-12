@@ -354,9 +354,10 @@ export const useBots = defineStore('bots', () => {
 	function rawState(name: string): { state: BotState; hint?: string } {
 		const id = chats[name]?.id
 		if (!id) return { state: 'idle' }
-		const l = sessions.live[id]
+		// A turn sent from here, or one started elsewhere that the open chat watches live.
+		const l = sessions.live[id] ?? sessions.botTurns[id]
 		if (l) {
-			if (l.approval) return { state: 'waiting', hint: 'Waiting for your approval' }
+			if (('approval' in l && l.approval) || l.prompt) return { state: 'waiting', hint: 'Waiting for your approval' }
 			const last = l.turn.steps.at(-1)
 			if (last?.kind === 'tool' && last.status === 'running')
 				return { state: 'working', hint: `Running ${prettyToolName(last.name)}` }

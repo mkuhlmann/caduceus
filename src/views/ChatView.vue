@@ -75,7 +75,10 @@ const remote = computed(() => (id.value && !live.value ? sessions.remote[id.valu
 // A run in another tab or device can be stopped and steered from here; one in another channel only watched.
 const running = computed(() => !!live.value || !!remote.value?.runId)
 const liveStatus = computed(
-	() => live.value?.status ?? (remote.value && !remote.value.runId ? 'Working in another channel' : undefined),
+	() =>
+		live.value?.status ??
+		(id.value ? sessions.botTurns[id.value]?.status : undefined) ??
+		(remote.value && !remote.value.runId ? 'Working in another channel' : undefined),
 )
 // Turn-shaped placeholders only while a chat that is not in memory yet loads.
 const skeleton = computed(() => !!id.value && !turns.value.length && sessions.isLoading(id.value))
