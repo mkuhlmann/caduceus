@@ -1,16 +1,27 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { PanelLeft, GitFork } from 'lucide-vue-next'
+import { PanelLeft, GitFork, Settings2, CalendarClock } from 'lucide-vue-next'
 import { useSessions, sourceLabel } from '@/stores/sessions'
+import { useBots } from '@/stores/bots'
 import { useProjects, PROJECT_COLORS } from '@/stores/projects'
 import { useApp } from '@/stores/app'
 import { useToasts } from '@/stores/toast'
 import { dashboard } from '@/lib/dashboard'
+import { setSessionProfile } from '@/lib/gateway'
 import { dateTime } from '@/lib/time'
+import { useTitle } from '@/lib/title'
 import SessionSidebar from '@/components/chat/SessionSidebar.vue'
 import AgentTurnView from '@/components/chat/AgentTurnView.vue'
 import Composer from '@/components/chat/Composer.vue'
+import BotSidebar from '@/components/bots/BotSidebar.vue'
+import BotAvatar from '@/components/bots/BotAvatar.vue'
+import BotSettingsModal from '@/components/bots/BotSettingsModal.vue'
+import RoutinesPanel from '@/components/bots/RoutinesPanel.vue'
+import MentionText from '@/components/chat/MentionText.vue'
+import { mentionNote, parseBotNotice, parseSystemNotice, resolveMentions, stripMentionNote } from '@/lib/mentions'
+import { STATE_LABELS } from '@/lib/avatar'
+import { connectBot } from '@/components/bots/connect'
 
 const route = useRoute()
 const router = useRouter()
@@ -18,8 +29,27 @@ const sessions = useSessions()
 const projects = useProjects()
 const app = useApp()
 const toasts = useToasts()
+const bots = useBots()
 
-const id = computed(() => (route.params.id as string | undefined) || undefined)
+// On /bots/:name this is a bot's chat: its one `Bot Chat`, with the bot roster beside it.
+const botName = computed(() => (route.params.name as string | undefined) || undefined)
+const bot = computed(() => (botName.value ? bots.byName(botName.value) : undefined))
+const botState = computed(() => (botName.value ? bots.stateOf(botName.value) : { state: 'idle' as const }))
+const editingBot = ref(false)
+// The routines pane docks beside a bot's chat; it stays open across bots until closed.
+const routinesOpen = ref(localStorage.getItem('caduceus.routinesOpen') === '1')
+watch(routinesOpen, (v) => localStorage.setItem('caduceus.routinesOpen', v ? '1' : '0'))
+// "Open recent session" shows another conversation of the bot (a routine run, a side thread) in its place.
+const botSession = computed(() =>
+	botName.value ? (route.query.session as string | undefined) || undefined : undefined,
+)
+// Registered before anything loads it, so its requests go to the bot's gateway path.
+watch([botName, botSession], ([name, s]) => name && s && setSessionProfile(s, name), { immediate: true, flush: 'sync' })
+const id = computed(() =>
+	botName.value
+		? (botSession.value ?? bots.chatId(botName.value))
+		: (route.params.id as string | undefined) || undefined,
+)
 const session = computed(() => (id.value ? sessions.byId(id.value) : undefined))
 const project = computed(() =>
 	id.value ? projects.forSession(id.value) : projects.items.find((p) => p.id === route.query.project),
@@ -47,7 +77,11 @@ const skeleton = computed(() => !!id.value && !turns.value.length && sessions.is
 const fadeIn = ref(false)
 watch(skeleton, (v) => v && (fadeIn.value = true))
 const lastError = computed(() => (id.value ? sessions.lastError[id.value] : undefined))
-const foreign = computed(() => session.value?.source && !['api_server'].includes(session.value.source))
+const foreign = computed(
+	() => !botName.value && session.value?.source && !['api_server'].includes(session.value.source),
+)
+// The face beside a reply is alive only on the newest one; earlier replies show it still.
+const lastAgentKey = computed(() => [...shownTurns.value].reverse().find((t) => t.kind === 'agent')?.key)
 
 const scroller = ref<HTMLElement>()
 const content = ref<HTMLElement>()
@@ -83,6 +117,23 @@ watch(
 		sessions.follow(v)
 		scrollDown()
 	},
+	{ immediate: true },
+)
+
+watch(
+	botName,
+	async (name) => {
+		if (!name) return
+		if (!bots.loaded) await bots.load()
+		const b = bots.byName(name)
+		if (b?.connected && bots.chats[name] === undefined) await bots.findChat(name)
+	},
+	{ immediate: true },
+)
+// Whatever the open bot writes while you look at it counts as read.
+watch(
+	[botName, () => (botName.value ? bots.chats[botName.value]?.last_active : 0), () => turns.value.length],
+	([name]) => name && !document.hidden && bots.markSeen(name),
 	{ immediate: true },
 )
 
@@ -144,7 +195,37 @@ watch(content, (el, old) => {
 })
 
 async function send(text: string, images: string[]) {
+	// A Bot Chat is one forever-conversation: /new would fork it, so it compacts instead (as in Hermes Desktop).
+	if (botName.value && !botSession.value && /^\/(new|reset)\s*$/.test(text.trim()) && !images.length) {
+		if (!id.value) return
+		toasts.push('Bot chats never reset. Compacting this one instead.')
+		creating.value = true
+		try {
+			const r = await bots.compact(botName.value)
+			toasts.push(
+				r?.compressed === false
+					? r.message || 'Nothing to compact yet.'
+					: `Chat compacted${r?.removed ? `, ${r.removed} messages folded` : ''}`,
+			)
+		} catch (e) {
+			toasts.error(`Could not compact the chat: ${(e as Error).message}`)
+		} finally {
+			creating.value = false
+		}
+		return
+	}
 	let target = id.value
+	if (!target && botName.value) {
+		creating.value = true
+		try {
+			target = await bots.ensureChat(botName.value)
+		} catch (e) {
+			toasts.error(`Could not start a chat with this bot: ${(e as Error).message}`)
+			return
+		} finally {
+			creating.value = false
+		}
+	}
 	if (!target) {
 		creating.value = true
 		try {
@@ -162,7 +243,9 @@ async function send(text: string, images: string[]) {
 		}
 	}
 	stickToBottom = true
-	sessions.send(target, text, images)
+	// Tagging other bots gets Desktop's identification note, so this bot knows exactly whom it should contact.
+	const note = mentionNote(resolveMentions(text, bots.bots, activeProfile.value))
+	sessions.send(target, text + note, images)
 }
 
 async function continueInCopy() {
@@ -177,13 +260,61 @@ async function continueInCopy() {
 	}
 }
 
-const greeting = computed(() => (project.value ? `New chat in ${project.value.name}` : 'What should Hermes work on?'))
+const greeting = computed(() =>
+	bot.value
+		? `What should ${bot.value.displayName} work on?`
+		: project.value
+			? `New chat in ${project.value.name}`
+			: 'What should Hermes work on?',
+)
+const intro = computed(
+	() =>
+		(bot.value ? bot.value.description : project.value?.description) ||
+		'Hermes can run commands, browse, write files and use its skills on the machine it lives on. You can watch each step and approve risky ones.',
+)
+// The tab names the bot or the chat, and says so when a run waits for an approval, so it shows from another tab.
+const needsApproval = computed(() => !!(live.value?.approval ?? remote.value?.approval))
+useTitle(() => {
+	const name = bot.value
+		? bot.value.displayName
+		: id.value
+			? session.value?.title || session.value?.preview?.slice(0, 60) || 'Untitled chat'
+			: project.value
+				? `New chat in ${project.value.name}`
+				: 'New chat'
+	return needsApproval.value ? `Approval needed – ${name}` : name
+})
+// The bot this chat talks to: the open bot, or Hermes itself in the main chat. @ offers every other bot.
+const activeProfile = computed(() => botName.value ?? 'default')
+watch(
+	() => app.dashboard?.ok,
+	(ok) => ok && !bots.loaded && bots.load(),
+	{ immediate: true },
+)
+/** A user turn's text as it should read: without the appended note, or as a notice from another bot. */
+function userView(text: string) {
+	const notice = parseBotNotice(text)
+	if (notice) {
+		const from = bots.bots.find((b) => b.handle === notice.handle || b.name === notice.handle)
+		return { notice, from, text: notice.body }
+	}
+	return { notice: null, from: undefined, text: stripMentionNote(text) }
+}
+const shownModel = computed(() => (bot.value ? bot.value.model : model.value))
+const connectingBot = ref(false)
+async function connectThisBot() {
+	if (!bot.value) return
+	connectingBot.value = true
+	await connectBot(bot.value)
+	connectingBot.value = false
+}
 </script>
 
 <template>
 	<div class="flex h-full">
 		<div class="hidden md:block">
-			<SessionSidebar :active-id="id" />
+			<BotSidebar v-if="botName" :active="botName" />
+			<SessionSidebar v-else :active-id="id" />
 		</div>
 		<Transition name="drawer">
 			<div v-if="drawer" class="fixed inset-0 z-40 md:hidden">
@@ -191,17 +322,54 @@ const greeting = computed(() => (project.value ? `New chat in ${project.value.na
 				<div
 					class="drawer-panel absolute inset-y-0 left-0 w-[85%] max-w-xs bg-surface pt-[env(safe-area-inset-top)] pb-[env(safe-area-inset-bottom)] shadow-2xl"
 				>
-					<SessionSidebar :active-id="id" @navigate="drawer = false" />
+					<BotSidebar v-if="botName" :active="botName" @navigate="drawer = false" />
+					<SessionSidebar v-else :active-id="id" @navigate="drawer = false" />
 				</div>
 			</div>
 		</Transition>
 
 		<section class="flex min-w-0 flex-1 flex-col">
 			<header class="flex h-14 shrink-0 items-center gap-2 border-b border-line px-3 md:px-6">
-				<button class="icon-btn md:hidden" aria-label="Show chats" @click="drawer = true">
+				<button class="icon-btn md:hidden" :aria-label="botName ? 'Show bots' : 'Show chats'" @click="drawer = true">
 					<PanelLeft :size="18" />
 				</button>
-				<div class="min-w-0 flex-1">
+				<template v-if="botName">
+					<BotAvatar
+						:seed="botName"
+						:look="bot?.look"
+						:image="bot?.image"
+						:state="botState.state"
+						:hint="botState.hint"
+						:alt="bot?.displayName ?? botName"
+						:size="34"
+					/>
+					<div class="min-w-0 flex-1">
+						<h1 class="truncate text-base font-semibold">{{ bot?.displayName ?? botName }}</h1>
+						<p class="truncate text-xs text-ink-3">
+							{{
+								botState.state !== 'idle'
+									? (botState.hint ?? STATE_LABELS[botState.state])
+									: `@${bot?.handle ?? botName}`
+							}}
+						</p>
+					</div>
+					<span v-if="shownModel" class="chip hidden sm:inline-flex" title="Model this bot uses">{{ shownModel }}</span>
+					<button
+						v-if="bot"
+						class="icon-btn"
+						:class="{ 'bg-surface-2 text-ink': routinesOpen }"
+						:aria-pressed="routinesOpen"
+						aria-label="Routines"
+						title="Routines"
+						@click="routinesOpen = !routinesOpen"
+					>
+						<CalendarClock :size="17" />
+					</button>
+					<button v-if="bot" class="icon-btn" :aria-label="`${bot.displayName} settings`" @click="editingBot = true">
+						<Settings2 :size="17" />
+					</button>
+				</template>
+				<div v-else class="min-w-0 flex-1">
 					<h1 class="truncate text-base font-semibold">
 						{{ session?.title || session?.preview?.slice(0, 70) || (id ? 'Untitled chat' : 'New chat') }}
 					</h1>
@@ -215,20 +383,51 @@ const greeting = computed(() => (project.value ? `New chat in ${project.value.na
 						<span v-if="session?.started_at">{{ dateTime(session.started_at) }}</span>
 					</p>
 				</div>
-				<span v-if="model" class="chip hidden sm:inline-flex" :title="'Model used for new turns'">{{ model }}</span>
+				<span v-if="model && !botName" class="chip hidden sm:inline-flex" :title="'Model used for new turns'">{{
+					model
+				}}</span>
 			</header>
 
 			<div ref="scroller" class="min-h-0 flex-1 overflow-y-auto" @scroll="onScroll">
 				<div v-if="!id" class="mx-auto flex h-full max-w-4xl flex-col justify-end px-4 pb-6 md:px-8">
-					<h2 class="display mb-2 text-3xl">{{ greeting }}</h2>
-					<p class="mb-6 max-w-[60ch] text-ink-2">
-						{{
-							project?.description ||
-							'Hermes can run commands, browse, write files and use its skills on the machine it lives on. You can watch each step and approve risky ones.'
-						}}
-					</p>
+					<template v-if="bot && !bot.connected">
+						<BotAvatar :seed="bot.name" :look="bot.look" :image="bot.image" :alt="bot.displayName" :size="64" />
+						<h2 class="display mt-4 mb-2 text-3xl">Connect {{ bot.displayName }}</h2>
+						<p class="mb-4 max-w-[60ch] text-ink-2">
+							This bot was made outside Caduceus. To chat with it, Caduceus gives it a gateway key of its own and keeps
+							that key on this server.
+						</p>
+						<button class="btn-primary self-start" :disabled="connectingBot" @click="connectThisBot">
+							Connect bot
+						</button>
+					</template>
+					<template v-else>
+						<BotAvatar
+							v-if="bot"
+							:seed="bot.name"
+							:look="bot.look"
+							:image="bot.image"
+							:alt="bot.displayName"
+							:size="64"
+							class="mb-4"
+						/>
+						<h2 class="display mb-2 text-3xl">{{ greeting }}</h2>
+						<p class="mb-6 max-w-[60ch] text-ink-2">{{ intro }}</p>
+					</template>
 				</div>
 				<div v-else ref="content" class="mx-auto max-w-4xl px-4 py-6 md:px-8">
+					<div
+						v-if="botSession && bot"
+						class="mb-4 flex flex-wrap items-center justify-between gap-2 rounded-lg bg-surface-2 px-3 py-2 text-sm text-ink-2"
+					>
+						<span
+							>Another conversation of {{ bot.displayName }}:
+							<span class="font-medium text-ink">{{ session?.title || 'Untitled' }}</span></span
+						>
+						<RouterLink :to="`/bots/${encodeURIComponent(bot.name)}`" class="btn-outline h-7"
+							>Back to Bot Chat</RouterLink
+						>
+					</div>
 					<div v-if="skeleton" class="skeleton" role="status" aria-label="Loading conversation">
 						<template v-for="i in 2" :key="i">
 							<div class="my-6 flex justify-end">
@@ -249,8 +448,50 @@ const greeting = computed(() => (project.value ? `New chat in ${project.value.na
 							Show earlier messages
 						</button>
 						<template v-for="t in shownTurns" :key="t.key">
+							<details
+								v-if="t.kind === 'user' && parseSystemNotice(t.text)"
+								class="my-4 max-w-[72ch] rounded-lg border border-line px-3 py-2 text-sm"
+							>
+								<summary class="cursor-pointer text-ink-2">
+									{{ parseSystemNotice(t.text)!.title }}
+									<span v-if="parseSystemNotice(t.text)!.body" class="text-ink">
+										{{ parseSystemNotice(t.text)!.body }}</span
+									>
+								</summary>
+								<pre class="mt-2 overflow-x-auto font-mono text-xs whitespace-pre-wrap text-ink-3">{{
+									parseSystemNotice(t.text)!.details
+								}}</pre>
+							</details>
 							<div
-								v-if="t.kind === 'user'"
+								v-else-if="t.kind === 'user' && userView(t.text).notice"
+								class="my-6 flex max-w-[85%] gap-3"
+								:class="{ 'turn-sent': t.key === 'live-user' }"
+							>
+								<BotAvatar
+									:seed="userView(t.text).from?.name ?? userView(t.text).notice!.handle"
+									:look="userView(t.text).from?.look"
+									:image="userView(t.text).from?.image"
+									:alt="userView(t.text).notice!.from"
+									:size="28"
+									still
+									class="mt-0.5"
+								/>
+								<div class="min-w-0 rounded-2xl rounded-tl-md border border-line px-4 py-2.5">
+									<p class="mb-1 text-xs text-ink-3">
+										Message from
+										<span class="font-medium text-ink-2">{{
+											userView(t.text).from?.displayName ?? userView(t.text).notice!.from
+										}}</span>
+										@{{ userView(t.text).notice!.handle
+										}}<template v-if="userView(t.text).notice!.notifyOnly">, no reply needed</template>
+									</p>
+									<p class="whitespace-pre-wrap">
+										<MentionText :text="userView(t.text).text" :bots="bots.bots" />
+									</p>
+								</div>
+							</div>
+							<div
+								v-else-if="t.kind === 'user'"
 								class="my-6 flex justify-end"
 								:class="{ 'turn-sent': t.key === 'live-user' }"
 							>
@@ -264,8 +505,30 @@ const greeting = computed(() => (project.value ? `New chat in ${project.value.na
 											class="max-h-48 rounded-md"
 										/>
 									</div>
-									<p class="whitespace-pre-wrap">{{ t.text }}</p>
+									<p class="whitespace-pre-wrap">
+										<MentionText :text="userView(t.text).text" :bots="bots.bots" />
+									</p>
 								</div>
+							</div>
+							<div v-else-if="bot" class="flex gap-3">
+								<BotAvatar
+									:seed="bot.name"
+									:look="bot.look"
+									:image="bot.image"
+									:state="t.key === lastAgentKey ? botState.state : 'idle'"
+									:hint="t.key === lastAgentKey ? botState.hint : undefined"
+									:alt="bot.displayName"
+									:size="28"
+									:still="t.key !== lastAgentKey"
+									class="mt-0.5"
+								/>
+								<AgentTurnView
+									class="min-w-0 flex-1"
+									bot
+									:turn="t"
+									:status="t.live ? (liveStatus ?? botState.hint) : undefined"
+									@approve="(c) => id && sessions.answerApproval(id, c)"
+								/>
 							</div>
 							<AgentTurnView
 								v-else
@@ -294,16 +557,30 @@ const greeting = computed(() => (project.value ? `New chat in ${project.value.na
 				</div>
 				<Composer
 					ref="composer"
-					:draft-key="id ?? 'new'"
+					:draft-key="id ?? (botName ? `bot:${botName}` : 'new')"
 					:running="running"
-					:disabled="creating || !app.gateway?.ok"
-					:placeholder="!app.gateway?.ok ? 'Connect the gateway API to chat' : running ? 'Redirect Hermes' : undefined"
+					:disabled="creating || !app.gateway?.ok || (!!bot && !bot.connected)"
+					:placeholder="
+						!app.gateway?.ok
+							? 'Connect the gateway API to chat'
+							: running
+								? `Redirect ${bot?.displayName ?? 'Hermes'}`
+								: bot
+									? `Message ${bot.displayName}`
+									: undefined
+					"
 					autofocus
+					:mentions="bots.bots"
+					:active-bot="activeProfile"
 					@send="send"
 					@stop="id && sessions.stop(id)"
 				/>
 			</div>
 		</section>
+		<div v-if="bot && routinesOpen" class="fixed inset-0 z-40 md:static md:z-auto md:h-full">
+			<RoutinesPanel :key="bot.name" :bot="bot" @close="routinesOpen = false" />
+		</div>
+		<BotSettingsModal v-if="editingBot && bot" :bot="bot" @close="editingBot = false" />
 	</div>
 </template>
 

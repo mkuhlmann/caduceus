@@ -1,4 +1,5 @@
 import { DASH, get, post, put, patch, del, qs, request } from './http'
+import type { Job } from './gateway'
 
 /** Hermes dashboard REST API (config, skills, kanban, webhooks, search, projects). */
 
@@ -106,6 +107,18 @@ export type SearchHit = {
 	preview?: string
 }
 
+export type Profile = {
+	name: string
+	is_default?: boolean
+	model?: string | null
+	provider?: string | null
+	description?: string
+	display_name?: string
+	bot_title?: string
+	skill_count?: number
+	gateway_running?: boolean
+}
+
 const K = `${DASH}/api/plugins/kanban`
 
 export const dashboard = {
@@ -132,6 +145,28 @@ export const dashboard = {
 	search: (q: string, limit = 30) =>
 		get<{ results: SearchHit[] }>(`${DASH}/api/sessions/search${qs({ q, limit })}`).then((r) => r.results),
 	sessionStats: () => get(`${DASH}/api/sessions/stats`),
+	// Profiles: Hermes' bots
+	profiles: () => get<{ profiles: Profile[] }>(`${DASH}/api/profiles`).then((r) => r.profiles),
+	profileSoul: (name: string) =>
+		get<{ content: string }>(`${DASH}/api/profiles/${encodeURIComponent(name)}/soul`).then((r) => r.content ?? ''),
+	setProfileSoul: (name: string, content: string) =>
+		put(`${DASH}/api/profiles/${encodeURIComponent(name)}/soul`, { content }),
+	setProfileDescription: (name: string, description: string) =>
+		put(`${DASH}/api/profiles/${encodeURIComponent(name)}/description`, { description }),
+	setProfileModel: (name: string, provider: string, model: string) =>
+		put(`${DASH}/api/profiles/${encodeURIComponent(name)}/model`, { provider, model }),
+
+	// A bot's routines: cron jobs in the bot's own profile, named `[bot:<name>] <routine>` as in Hermes Desktop.
+	botJobs: (profile: string) => get<Job[]>(`${DASH}/api/cron/jobs${qs({ profile })}`),
+	createBotJob: (profile: string, body: Record<string, unknown>) =>
+		post<Job>(`${DASH}/api/cron/jobs${qs({ profile })}`, body),
+	updateBotJob: (profile: string, id: string, updates: Record<string, unknown>) =>
+		put<Job>(`${DASH}/api/cron/jobs/${encodeURIComponent(id)}${qs({ profile })}`, { updates }),
+	deleteBotJob: (profile: string, id: string) =>
+		del(`${DASH}/api/cron/jobs/${encodeURIComponent(id)}${qs({ profile })}`),
+	botJobAction: (profile: string, id: string, action: 'pause' | 'resume' | 'trigger') =>
+		post(`${DASH}/api/cron/jobs/${encodeURIComponent(id)}/${action}${qs({ profile })}`),
+
 	projectsTree: () => get<{ projects: any[] }>(`${DASH}/api/profiles/projects/tree${qs({ preview_limit: 5 })}`),
 
 	// Config

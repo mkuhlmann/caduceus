@@ -4,9 +4,17 @@ const drafts = new Map<string, { text: string; images: string[] }>()
 </script>
 
 <script setup lang="ts">
-import { nextTick, ref, watch } from 'vue'
+import { computed, nextTick, ref, watch } from 'vue'
 import { ArrowUp, Square, ImagePlus, X } from 'lucide-vue-next'
 import { useToasts } from '@/stores/toast'
+import BotAvatar from '@/components/bots/BotAvatar.vue'
+import { mentionCandidates, mentionTag, typedMention, type MentionTarget } from '@/lib/mentions'
+import type { BotLook } from '@/lib/avatar'
+
+/** A bot the composer can @mention, with what it needs to show its face in the list. */
+export type MentionBot = MentionTarget & { look?: BotLook | null; image?: string | null }
+/** A tag that is not a bot, like `@all` in a group chat. */
+export type MentionExtra = { tag: string; label: string }
 
 const props = defineProps<{
 	running?: boolean
@@ -14,6 +22,10 @@ const props = defineProps<{
 	placeholder?: string
 	autofocus?: boolean
 	draftKey?: string
+	/** Bots `@` offers; the one being talked to is left out. */
+	mentions?: MentionBot[]
+	activeBot?: string
+	extraMentions?: MentionExtra[]
 }>()
 const emit = defineEmits<{ send: [text: string, images: string[]]; stop: [] }>()
 const toasts = useToasts()
@@ -22,6 +34,43 @@ const images = ref<string[]>([])
 const area = ref<HTMLTextAreaElement>()
 const fileInput = ref<HTMLInputElement>()
 const dragging = ref(false)
+
+// @mention autocomplete: typing "@res" offers the bots whose tags start with (or contain) it.
+const typed = ref<{ start: number; query: string } | null>(null)
+const pick = ref(0)
+type Option = { tag: string; label: string; bot?: MentionBot }
+const options = computed<Option[]>(() => {
+	if (!typed.value) return []
+	const q = typed.value.query
+	const extras = (props.extraMentions ?? []).filter((x) => x.tag.startsWith(q)).map((x) => ({ ...x }))
+	const bots = mentionCandidates(q, props.mentions ?? [], props.activeBot).map((b) => ({
+		tag: mentionTag(b),
+		label: b.displayName,
+		bot: b as MentionBot,
+	}))
+	return [...bots, ...extras].slice(0, 8)
+})
+watch(options, () => (pick.value = 0))
+
+function updateTyped() {
+	const el = area.value
+	if (!el || (!props.mentions?.length && !props.extraMentions?.length)) return (typed.value = null)
+	typed.value = typedMention(text.value, el.selectionStart ?? text.value.length)
+}
+
+function choose(o: Option) {
+	const el = area.value
+	if (!el || !typed.value) return
+	const caret = el.selectionStart ?? text.value.length
+	const insert = `@${o.tag} `
+	const pos = typed.value.start + insert.length
+	text.value = text.value.slice(0, typed.value.start) + insert + text.value.slice(caret)
+	typed.value = null
+	nextTick(() => {
+		el.focus()
+		el.setSelectionRange(pos, pos)
+	})
+}
 
 const MAX_BYTES = 6 * 1024 * 1024
 
@@ -56,6 +105,24 @@ function submit() {
 }
 
 function onKey(e: KeyboardEvent) {
+	if (options.value.length) {
+		if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+			e.preventDefault()
+			const n = options.value.length
+			pick.value = (pick.value + (e.key === 'ArrowDown' ? 1 : n - 1)) % n
+			return
+		}
+		if ((e.key === 'Enter' || e.key === 'Tab') && !e.isComposing) {
+			e.preventDefault()
+			choose(options.value[pick.value]!)
+			return
+		}
+		if (e.key === 'Escape') {
+			e.preventDefault()
+			typed.value = null
+			return
+		}
+	}
 	if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) {
 		e.preventDefault()
 		submit()
@@ -100,7 +167,7 @@ defineExpose({ focus: () => area.value?.focus() })
 
 <template>
 	<form
-		class="rounded-2xl border bg-surface shadow-sm transition-colors focus-within:border-focus"
+		class="relative rounded-2xl border bg-surface shadow-sm transition-colors focus-within:border-focus"
 		:class="dragging ? 'border-gold' : 'border-line'"
 		@submit.prevent="submit"
 		@dragover.prevent="dragging = true"
@@ -120,6 +187,30 @@ defineExpose({ focus: () => area.value?.focus() })
 				</button>
 			</div>
 		</div>
+		<ul
+			v-if="options.length"
+			id="mention-options"
+			class="absolute bottom-full left-2 z-30 mb-2 w-72 max-w-[calc(100%-1rem)] rounded-lg border border-line bg-surface p-1 shadow-xl"
+			role="listbox"
+			aria-label="Mention"
+		>
+			<li
+				v-for="(o, i) in options"
+				:id="`mention-${i}`"
+				:key="o.tag"
+				role="option"
+				:aria-selected="i === pick"
+				class="flex cursor-pointer items-center gap-2.5 rounded-md px-2 py-1.5 text-sm"
+				:class="i === pick ? 'bg-surface-2' : ''"
+				@mousedown.prevent="choose(o)"
+				@mouseenter="pick = i"
+			>
+				<BotAvatar v-if="o.bot" :seed="o.bot.name" :look="o.bot.look" :image="o.bot.image" :size="22" still />
+				<span v-else class="grid size-[22px] place-items-center rounded-full bg-surface-3 text-xs text-ink-2">@</span>
+				<span class="min-w-0 flex-1 truncate">{{ o.label }}</span>
+				<span class="shrink-0 text-ink-3">@{{ o.tag }}</span>
+			</li>
+		</ul>
 		<textarea
 			ref="area"
 			v-model="text"
@@ -128,7 +219,15 @@ defineExpose({ focus: () => area.value?.focus() })
 			:placeholder="placeholder ?? 'Message Hermes'"
 			:autofocus="autofocus"
 			aria-label="Message"
+			:aria-autocomplete="mentions?.length ? 'list' : undefined"
+			:aria-controls="options.length ? 'mention-options' : undefined"
+			:aria-activedescendant="options.length ? `mention-${pick}` : undefined"
 			@keydown="onKey"
+			@input="updateTyped"
+			@click="updateTyped"
+			@keyup.left="updateTyped"
+			@keyup.right="updateTyped"
+			@blur="typed = null"
 			@paste="onPaste"
 		/>
 		<div class="flex items-center justify-between gap-2 px-2 pb-2">

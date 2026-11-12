@@ -7,7 +7,8 @@ import { Elysia } from 'elysia'
  */
 const active = new Map<string, { runId: string; startedAt: number }>()
 
-const CHAT_STREAM = /^\/api\/sessions\/([^/]+)\/chat\/stream$/
+// Bots' chats go through `/p/<profile>/` on the multiplexed gateway.
+const CHAT_STREAM = /^(?:\/p\/[^/]+)?\/api\/sessions\/([^/]+)\/chat\/stream$/
 
 /**
  * Hermes interrupts a chat run when its stream disconnects, so a reload or a closed tab would kill the

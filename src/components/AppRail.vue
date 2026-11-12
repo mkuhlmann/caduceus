@@ -3,6 +3,7 @@ import { computed } from 'vue'
 import { useRoute } from 'vue-router'
 import {
 	MessageSquare,
+	Bot,
 	History,
 	FolderKanban,
 	CalendarClock,
@@ -22,6 +23,7 @@ const route = useRoute()
 
 const items = [
 	{ to: '/chat', label: 'Chat', icon: MessageSquare, match: 'chat' },
+	{ to: '/bots', label: 'Bots', icon: Bot, match: 'bots' },
 	{ to: '/history', label: 'History', icon: History, match: 'history' },
 	{ to: '/projects', label: 'Projects', icon: FolderKanban, match: 'projects' },
 	{ to: '/schedules', label: 'Schedules', icon: CalendarClock, match: 'schedules' },
@@ -37,6 +39,8 @@ function cycleTheme() {
 	app.theme = app.theme === 'system' ? 'light' : app.theme === 'light' ? 'dark' : 'system'
 }
 
+// A bot's chat counts as the Bots section.
+const current = computed(() => (route.meta.rail as string | undefined) ?? route.name)
 const healthy = computed(() => app.gateway?.ok && (app.dashboard?.ok ?? true))
 </script>
 
@@ -45,7 +49,7 @@ const healthy = computed(() => app.gateway?.ok && (app.dashboard?.ok ?? true))
 		class="flex shrink-0 items-center gap-0.5 border-t border-line bg-surface px-2 pt-1.5 pb-[max(0.375rem,env(safe-area-inset-bottom))] md:w-[76px] md:flex-col md:overflow-visible md:border-t-0 md:border-r md:px-0 md:py-3"
 		aria-label="Main"
 	>
-		<RouterLink to="/chat" class="mb-3 hidden size-10 text-ink md:block" aria-label="Caduceus home">
+		<RouterLink :to="`/${app.startPage}`" class="mb-3 hidden size-10 text-ink md:block" aria-label="Caduceus home">
 			<CaduceusMark />
 		</RouterLink>
 		<RouterLink
@@ -53,11 +57,11 @@ const healthy = computed(() => app.gateway?.ok && (app.dashboard?.ok ?? true))
 			:key="item.to"
 			:to="item.to"
 			class="group flex min-w-0 flex-1 flex-col items-center gap-0.5 pressable rounded-lg px-1 py-2 text-[0.6875rem] font-medium md:w-[64px] md:flex-none md:px-1.5 md:py-1.5"
-			:class="route.name === item.match ? 'bg-surface-2 text-ink' : 'text-ink-3 hover:text-ink'"
-			:aria-current="route.name === item.match ? 'page' : undefined"
+			:class="current === item.match ? 'bg-surface-2 text-ink' : 'text-ink-3 hover:text-ink'"
+			:aria-current="current === item.match ? 'page' : undefined"
 			:title="item.label"
 		>
-			<component :is="item.icon" :size="19" :stroke-width="route.name === item.match ? 2.2 : 1.8" />
+			<component :is="item.icon" :size="19" :stroke-width="current === item.match ? 2.2 : 1.8" />
 			<span class="sr-only md:not-sr-only">{{ item.label }}</span>
 		</RouterLink>
 		<div class="hidden flex-1 md:block" />

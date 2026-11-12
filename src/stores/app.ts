@@ -14,6 +14,18 @@ export type ConnectionInfo = {
 
 type Probe = { ok: boolean; status: number; detail?: string } | null
 
+export type StartPage = 'chat' | 'bots'
+const START_KEY = 'caduceus.startPage'
+
+function savedStartPage(): StartPage {
+	return localStorage.getItem(START_KEY) === 'bots' ? 'bots' : 'chat'
+}
+
+/** Where opening the app (or its home link) lands: the chat or the bots, as chosen in Settings. */
+export function homePath() {
+	return `/${savedStartPage()}`
+}
+
 export const useApp = defineStore('app', () => {
 	const theme = ref<'system' | 'light' | 'dark'>((localStorage.getItem('caduceus.theme') as any) ?? 'system')
 	const media = matchMedia('(prefers-color-scheme: dark)')
@@ -26,6 +38,9 @@ export const useApp = defineStore('app', () => {
 		document.documentElement.dataset.theme = dark ? 'dark' : 'light'
 		document.querySelector('meta[name=theme-color]')?.setAttribute('content', dark ? '#151936' : '#eef0f7')
 	})
+
+	const startPage = ref<StartPage>(savedStartPage())
+	watchEffect(() => localStorage.setItem(START_KEY, startPage.value))
 
 	const connection = ref<ConnectionInfo | null>(null)
 	const gateway = ref<Probe>(null)
@@ -74,5 +89,19 @@ export const useApp = defineStore('app', () => {
 	const hasGateway = () => !!gateway.value?.ok
 	const hasDashboard = () => !!dashboard.value?.ok
 
-	return { theme, connection, gateway, dashboard, uiAuth, ready, load, test, save, login, hasGateway, hasDashboard }
+	return {
+		theme,
+		startPage,
+		connection,
+		gateway,
+		dashboard,
+		uiAuth,
+		ready,
+		load,
+		test,
+		save,
+		login,
+		hasGateway,
+		hasDashboard,
+	}
 })

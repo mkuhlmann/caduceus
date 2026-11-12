@@ -110,6 +110,30 @@ export type ChatEvent =
 	| { type: 'error'; message: string }
 	| { type: 'status'; text: string }
 
+/**
+ * Which Hermes profile (bot) owns a session. Hermes itself (the default profile) is the gateway root; a bot's
+ * sessions live under `/p/<profile>/` on the multiplexed gateway, and the relay signs them with that bot's key.
+ */
+const owners = new Map<string, string>()
+
+export const BOT_CHAT_TITLE = 'Bot Chat'
+
+export function setSessionProfile(sessionId: string, profile: string) {
+	if (profile && profile !== 'default') owners.set(sessionId, profile)
+	else owners.delete(sessionId)
+}
+
+export function sessionProfile(sessionId: string): string | undefined {
+	return owners.get(sessionId)
+}
+
+/** Gateway base for a profile, or for the profile that owns a session. */
+export function gwFor(profile?: string) {
+	return profile && profile !== 'default' ? `${GW}/p/${enc(profile)}` : GW
+}
+
+const at = (sessionId?: string) => gwFor(sessionId ? owners.get(sessionId) : undefined)
+
 export const gateway = {
 	health: () => get<{ status: string; version?: string }>(`${GW}/health`),
 	capabilities: () => get(`${GW}/v1/capabilities`),
@@ -117,30 +141,43 @@ export const gateway = {
 
 	sessions: (p: { limit?: number; offset?: number; source?: string; title?: string; include_hidden?: boolean } = {}) =>
 		get<{ data: Session[]; has_more: boolean }>(`${GW}/api/sessions${qs(p)}`),
-	session: (id: string) => get<{ session: Session } | Session>(`${GW}/api/sessions/${enc(id)}`).then(unwrapSession),
+	session: (id: string) => get<{ session: Session } | Session>(`${at(id)}/api/sessions/${enc(id)}`).then(unwrapSession),
 	createSession: (body: { title?: string; system_prompt?: string; model?: string } = {}) =>
 		post<{ session: Session }>(`${GW}/api/sessions`, body).then((r) => r.session),
 	updateSession: (id: string, body: Partial<Pick<Session, 'title' | 'pinned' | 'archived' | 'hidden'>>) =>
-		patch(`${GW}/api/sessions/${enc(id)}`, body),
-	deleteSession: (id: string) => del(`${GW}/api/sessions/${enc(id)}`),
+		patch(`${at(id)}/api/sessions/${enc(id)}`, body),
+	deleteSession: (id: string) => del(`${at(id)}/api/sessions/${enc(id)}`),
 	forkSession: (id: string, title?: string) =>
-		post<{ session: Session }>(`${GW}/api/sessions/${enc(id)}/fork`, title ? { title } : {}).then((r) => r.session),
+		post<{ session: Session }>(`${at(id)}/api/sessions/${enc(id)}/fork`, title ? { title } : {}).then((r) => r.session),
 	messages: (id: string) =>
-		get<{ data: Message[] }>(`${GW}/api/sessions/${enc(id)}/messages${qs({ limit: 500, order: 'oldest' })}`).then(
+		get<{ data: Message[] }>(`${at(id)}/api/sessions/${enc(id)}/messages${qs({ limit: 500, order: 'oldest' })}`).then(
 			(r) => r.data,
 		),
 
 	/** Runs streaming through this Caduceus server right now, by session id (any tab or device). */
 	activeRuns: () => get<Record<string, string>>('ui-api/runs'),
-	run: (runId: string) => get<RunStatus>(`${GW}/v1/runs/${enc(runId)}`),
-	stopRun: (runId: string) => post(`${GW}/v1/runs/${enc(runId)}/stop`),
-	steer: (runId: string, input: string) => post(`${GW}/v1/runs/${enc(runId)}/steer`, { input }),
-	approve: (req: ApprovalRequest, choice: string) =>
-		post(`${GW}/v1/runs/${enc(req.run_id)}/approval`, {
+	run: (runId: string, sessionId?: string) => get<RunStatus>(`${at(sessionId)}/v1/runs/${enc(runId)}`),
+	stopRun: (runId: string, sessionId?: string) => post(`${at(sessionId)}/v1/runs/${enc(runId)}/stop`),
+	steer: (runId: string, input: string, sessionId?: string) =>
+		post(`${at(sessionId)}/v1/runs/${enc(runId)}/steer`, { input }),
+	approve: (req: ApprovalRequest, choice: string, sessionId?: string) =>
+		post(`${at(sessionId)}/v1/runs/${enc(req.run_id)}/approval`, {
 			choice,
 			...(req.request_id ? { request_id: req.request_id } : {}),
 			...(req.execution_generation !== undefined ? { execution_generation: req.execution_generation } : {}),
 		}),
+
+	/** A bot's one canonical conversation: Hermes identifies it by the exact title `Bot Chat`. */
+	findBotChat: (profile: string) =>
+		get<{ data: Session[] }>(
+			`${gwFor(profile)}/api/sessions${qs({ title: BOT_CHAT_TITLE, include_hidden: true, limit: 200 })}`,
+		).then((r) => r.data.find((s) => s.title === BOT_CHAT_TITLE)),
+	/** Under Hermes' session authority a Bot Chat may only be created with a title and a source. */
+	createBotChat: (profile: string) =>
+		post<{ session: Session }>(`${gwFor(profile)}/api/sessions`, {
+			title: BOT_CHAT_TITLE,
+			source: 'bot_peer_dm',
+		}).then((r) => r.session),
 
 	jobs: () => get<{ jobs: Job[] }>(`${GW}/api/jobs${qs({ include_disabled: true })}`).then((r) => r.jobs),
 	createJob: (body: Partial<Job>) => post<{ job: Job }>(`${GW}/api/jobs`, body).then((r) => r.job),
@@ -157,7 +194,7 @@ export const gateway = {
 		message: string | Array<Record<string, unknown>>,
 		opts: { signal?: AbortSignal; model?: string; instructions?: string } = {},
 	): AsyncGenerator<ChatEvent> {
-		const res = await fetch(url(`${GW}/api/sessions/${enc(sessionId)}/chat/stream`), {
+		const res = await fetch(url(`${at(sessionId)}/api/sessions/${enc(sessionId)}/chat/stream`), {
 			method: 'POST',
 			headers: { 'Content-Type': 'application/json', Accept: 'text/event-stream' },
 			body: JSON.stringify({

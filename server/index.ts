@@ -5,6 +5,8 @@ import { getConnection, saveConnection, publicConnection, envLocked } from './co
 import { relay } from './relay'
 import { authGuard, authRoutes } from './auth'
 import { projectRoutes } from './projects'
+import { botRoutes } from './bots'
+import { rpcRoutes } from './hermes-socket'
 import { runRoutes, trackChatStream } from './runs'
 import { embedded } from './embedded'
 
@@ -26,6 +28,8 @@ const app = new Elysia()
 	.use(authRoutes)
 	.onBeforeHandle({ as: 'global' }, authGuard)
 	.use(projectRoutes)
+	.use(botRoutes)
+	.use(rpcRoutes)
 	.use(runRoutes)
 	.get('/ui-api/connection', () => publicConnection())
 	.put('/ui-api/connection', async ({ body, set }) => {

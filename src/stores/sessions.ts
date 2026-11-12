@@ -1,6 +1,13 @@
 import { defineStore } from 'pinia'
 import { computed, reactive, ref, shallowReactive, shallowRef, watch } from 'vue'
-import { gateway, pendingApproval, type ApprovalRequest, type Message, type Session } from '@/lib/gateway'
+import {
+	gateway,
+	pendingApproval,
+	sessionProfile,
+	type ApprovalRequest,
+	type Message,
+	type Session,
+} from '@/lib/gateway'
 import { buildTurns, type AgentTurn, type ApprovalStep, type ToolStep, type Turn } from '@/lib/turns'
 import { useToasts } from './toast'
 import { useProjects } from './projects'
@@ -133,6 +140,22 @@ export const useSessions = defineStore('sessions', () => {
 	const lastError = shallowRef<Record<string, string>>({})
 	const remote = reactive<Record<string, Remote>>({})
 	const activeRuns = ref<Record<string, string>>({})
+	// Bots' conversations: kept apart so they never show up among Hermes' own chats.
+	const botSessions = reactive<Record<string, Session>>({})
+
+	/** Add a session fetched by id to the list it belongs to; moved to the top unless `inPlace`. */
+	function place(s: Session, inPlace = false) {
+		if (sessionProfile(s.id)) {
+			botSessions[s.id] = s
+			return
+		}
+		const i = list.value.findIndex((x) => x.id === s.id)
+		if (inPlace && i >= 0) list.value.splice(i, 1, s)
+		else {
+			if (i >= 0) list.value.splice(i, 1)
+			list.value.unshift(s)
+		}
+	}
 
 	async function loadList(more = false) {
 		loadingList.value = true
@@ -179,8 +202,8 @@ export const useSessions = defineStore('sessions', () => {
 		localStorage.setItem('caduceus.showScheduled', v ? '1' : '0')
 	}
 
-	function byId(id: string) {
-		return list.value.find((s) => s.id === id)
+	function byId(id: string): Session | undefined {
+		return list.value.find((s) => s.id === id) ?? botSessions[id]
 	}
 
 	/** Remember `id` as recently viewed and drop the transcripts of chats not looked at for a while. */
@@ -207,7 +230,7 @@ export const useSessions = defineStore('sessions', () => {
 				touch(id)
 				if (!byId(id)) {
 					const s = await gateway.session(id).catch(() => null)
-					if (s && !byId(id)) list.value.unshift(s)
+					if (s && !byId(id)) place(s)
 				}
 			} catch (e) {
 				if (!quiet) toasts.error(`Could not load this conversation: ${(e as Error).message}`)
@@ -274,7 +297,7 @@ export const useSessions = defineStore('sessions', () => {
 			// A message sent mid-run steers the agent instead of queueing a new turn.
 			const runId = live[id] ? live[id].runId : remote[id]!.runId
 			if (runId) {
-				await gateway.steer(runId, text).then(
+				await gateway.steer(runId, text, id).then(
 					() => toasts.push('Sent to the running agent'),
 					(e) => toasts.error(`Could not steer: ${(e as Error).message}`),
 				)
@@ -332,7 +355,7 @@ export const useSessions = defineStore('sessions', () => {
 				switch (ev.type) {
 					case 'run.started':
 						l.runId = ev.run_id
-						if (l.stopRequested) gateway.stopRun(ev.run_id).catch(() => l.abort.abort())
+						if (l.stopRequested) gateway.stopRun(ev.run_id, id).catch(() => l.abort.abort())
 						// Hermes names the chat from the message as the run starts.
 						setTimeout(() => refreshSession(id, true), 1500)
 						break
@@ -404,13 +427,7 @@ export const useSessions = defineStore('sessions', () => {
 	/** Fetch a session again; moved to the top unless `inPlace`. */
 	async function refreshSession(id: string, inPlace = false) {
 		const s = await gateway.session(id).catch(() => null)
-		if (!s) return
-		const i = list.value.findIndex((x) => x.id === id)
-		if (inPlace && i >= 0) list.value.splice(i, 1, s)
-		else {
-			if (i >= 0) list.value.splice(i, 1)
-			list.value.unshift(s)
-		}
+		if (s) place(s, inPlace)
 	}
 
 	/** A run of this session just ended: show its final state now and its upgraded title once Hermes has it. */
@@ -423,12 +440,12 @@ export const useSessions = defineStore('sessions', () => {
 		const l = live[id]
 		const remoteRun = remote[id]?.runId
 		if (!l && remoteRun) {
-			await gateway.stopRun(remoteRun).catch((e) => toasts.error(`Could not stop the run: ${(e as Error).message}`))
+			await gateway.stopRun(remoteRun, id).catch((e) => toasts.error(`Could not stop the run: ${(e as Error).message}`))
 			return
 		}
 		if (!l) return
 		if (l.runId) {
-			await gateway.stopRun(l.runId).catch(() => l.abort.abort())
+			await gateway.stopRun(l.runId, id).catch(() => l.abort.abort())
 			return
 		}
 		// The relay keeps the run going without this tab, so stop it once its id arrives.
@@ -441,7 +458,7 @@ export const useSessions = defineStore('sessions', () => {
 		const r = remote[id]
 		if (!l && r?.approval) {
 			try {
-				await gateway.approve(r.approval, choice)
+				await gateway.approve(r.approval, choice, id)
 				r.approval = undefined
 			} catch (e) {
 				toasts.error(`Could not send the decision: ${(e as Error).message}`)
@@ -450,7 +467,7 @@ export const useSessions = defineStore('sessions', () => {
 		}
 		if (!l?.approval) return
 		try {
-			await gateway.approve(l.approval, choice)
+			await gateway.approve(l.approval, choice, id)
 			const step = [...l.turn.steps].reverse().find((s): s is ApprovalStep => s.kind === 'approval' && !s.resolved)
 			if (step) step.resolved = choice
 			l.approval = undefined
@@ -483,7 +500,7 @@ export const useSessions = defineStore('sessions', () => {
 			const stale = !runId && !unfinished(messages[id] ?? [])
 			if (stale && !remote[id]) return
 			const [status, ms] = await Promise.all([
-				runId ? gateway.run(runId).catch(() => null) : null,
+				runId ? gateway.run(runId, id).catch(() => null) : null,
 				gateway.messages(id).catch(() => null),
 			])
 			if (followed !== id || live[id] || !ms) return
@@ -564,6 +581,7 @@ export const useSessions = defineStore('sessions', () => {
 	async function remove(id: string) {
 		await gateway.deleteSession(id)
 		list.value = list.value.filter((s) => s.id !== id)
+		delete botSessions[id]
 		delete messages[id]
 	}
 
@@ -604,5 +622,6 @@ export const useSessions = defineStore('sessions', () => {
 		remove,
 		fork,
 		refreshSession,
+		place,
 	}
 })

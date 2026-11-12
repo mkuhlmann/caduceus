@@ -2,8 +2,10 @@
 import { ref } from 'vue'
 import { useApp } from '@/stores/app'
 import CaduceusMark from '@/components/CaduceusMark.vue'
+import { useTitle } from '@/lib/title'
 
 const app = useApp()
+useTitle('Sign in')
 const password = ref('')
 const error = ref('')
 const busy = ref(false)

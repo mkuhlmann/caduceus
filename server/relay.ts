@@ -1,5 +1,9 @@
 import { getConnection, onConnectionChange, type Connection } from './config'
 import { isChatStream } from './runs'
+import { botKey } from './bots'
+
+/** `/p/<profile>/…`: a request for one bot (a Hermes profile) on the multiplexed gateway. */
+const BOT_PATH = /^\/p\/([^/]+)\//
 
 /**
  * Same-origin relay to the two public Hermes HTTP surfaces. It exists for three reasons:
@@ -127,13 +131,31 @@ export async function relay(target: 'gw' | 'dash', path: string, req: Request): 
 	const search = new URL(req.url).search
 	const upstream = base + path + search
 
+	// Each bot has its own gateway key; the connection's key is only valid for Hermes itself.
+	let gatewayKey = c.gatewayKey
+	const bot = target === 'gw' ? path.match(BOT_PATH)?.[1] : undefined
+	if (bot) {
+		const name = decodeURIComponent(bot)
+		gatewayKey = botKey(name) ?? ''
+		if (!gatewayKey)
+			return Response.json(
+				{
+					error: {
+						message: `Caduceus has no gateway key for the bot ${name}. Connect it first.`,
+						code: 'bot_not_connected',
+					},
+				},
+				{ status: 409 },
+			)
+	}
+
 	const send = async (retry: boolean): Promise<Response> => {
 		const headers = new Headers()
 		req.headers.forEach((v, k) => {
 			if (!HOP_BY_HOP.has(k.toLowerCase())) headers.set(k, v)
 		})
 		if (target === 'gw') {
-			if (c.gatewayKey) headers.set('Authorization', `Bearer ${c.gatewayKey}`)
+			if (gatewayKey) headers.set('Authorization', `Bearer ${gatewayKey}`)
 		} else {
 			if (c.dashboardUsername && c.dashboardPassword) {
 				if (retry || jar.size === 0) await dashboardLogin(c)

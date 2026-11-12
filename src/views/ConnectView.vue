@@ -30,7 +30,7 @@ async function save() {
 		const r = await app.save(form)
 		if (r.gateway?.ok) {
 			toasts.push('Connected to Hermes')
-			router.push('/chat')
+			router.push(`/${app.startPage}`)
 		}
 	} catch (e) {
 		toasts.error((e as Error).message)

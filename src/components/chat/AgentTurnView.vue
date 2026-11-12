@@ -7,7 +7,8 @@ import { handleCodeCopy } from '@/lib/markdown'
 import ToolWaypoint from './ToolWaypoint.vue'
 import MarkdownBlocks from './MarkdownBlocks.vue'
 
-const props = defineProps<{ turn: AgentTurn; status?: string }>()
+/** `bot`: a bot's chat, where the bot's face beside the turn shows that it is live, so the route stays quiet. */
+const props = defineProps<{ turn: AgentTurn; status?: string; bot?: boolean }>()
 const emit = defineEmits<{ approve: [choice: string] }>()
 
 type Segment =
@@ -62,7 +63,7 @@ const waiting = computed(() => props.turn.live && props.turn.steps.length === 0)
 </script>
 
 <template>
-	<article class="agent-turn" :class="{ live: turn.live }" @click="handleCodeCopy">
+	<article class="agent-turn" :class="{ live: turn.live, bot }" @click="handleCodeCopy">
 		<button
 			v-if="turn.reasoning"
 			class="mb-2 flex items-center gap-1 text-sm text-ink-3 hover:text-ink-2"
@@ -81,8 +82,8 @@ const waiting = computed(() => props.turn.live && props.turn.steps.length === 0)
 			</p>
 		</Transition>
 
-		<p v-if="waiting && !turn.reasoning" class="route-thread py-1 pl-6 text-sm text-ink-3">
-			<span class="live-dot" />{{ status || 'Working' }}
+		<p v-if="waiting && !turn.reasoning" class="py-1 text-sm text-ink-3" :class="{ 'route-thread pl-6': !bot }">
+			<span v-if="!bot" class="live-dot" />{{ status || 'Working' }}
 		</p>
 
 		<template v-for="(seg, idx) in segments" :key="seg.key">
@@ -141,9 +142,10 @@ const waiting = computed(() => props.turn.live && props.turn.steps.length === 0)
 				segments.at(-1)?.kind !== 'text' &&
 				!turn.steps.some((s) => s.kind === 'approval' && !s.resolved)
 			"
-			class="route-thread py-1 pl-6 text-sm text-ink-3"
+			class="py-1 text-sm text-ink-3"
+			:class="bot ? 'pl-1' : 'route-thread pl-6'"
 		>
-			<span class="live-dot" />{{ status || 'Working' }}
+			<span v-if="!bot" class="live-dot" />{{ status || 'Working' }}
 		</p>
 
 		<p v-if="turn.error" class="mt-2 max-w-[72ch] rounded-md bg-rose-soft px-3 py-2 text-sm">{{ turn.error }}</p>
@@ -191,7 +193,7 @@ const waiting = computed(() => props.turn.live && props.turn.steps.length === 0)
 	border-radius: 2px;
 	background: var(--line);
 }
-.live .route-thread:last-of-type::before {
+.live:not(.bot) .route-thread:last-of-type::before {
 	background: var(--gold);
 }
 .live-dot {

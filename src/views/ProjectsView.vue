@@ -12,6 +12,7 @@ import { useApp } from '@/stores/app'
 import { useProjects, PROJECT_COLORS } from '@/stores/projects'
 import { useSessions } from '@/stores/sessions'
 import { relative, dateTime } from '@/lib/time'
+import { useTitle } from '@/lib/title'
 
 const route = useRoute()
 const router = useRouter()
@@ -48,6 +49,8 @@ const rows = computed(() =>
 		.map((p) => ({ p, last: lastActivity(p.sessionIds) }))
 		.sort((a, b) => (b.last ?? b.p.updatedAt) - (a.last ?? a.p.updatedAt)),
 )
+
+useTitle(() => selected.value?.name)
 
 const show = (id: string) => router.push({ path: '/projects', query: { id } })
 const back = () => router.push({ path: '/projects' })
