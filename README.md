@@ -2,9 +2,15 @@
 
 A lightweight web and desktop frontend for [Hermes Agent](https://github.com/NousResearch/hermes-agent). It runs anywhere: on your laptop, on a server, in a container, or as a desktop app. It talks to Hermes only through its public HTTP APIs, so nothing has to be installed on the agent's machine.
 
+Next to chatting with Hermes itself, Caduceus gives you a team of bots: every Hermes profile becomes a bot with its own face, chat, skills and routines. Bots can message each other, and you can put several of them in a group chat.
+
 <p>
-<img src="docs/screenshot-chat.png" width="49%" alt="A chat with Hermes mid-run: finished tool steps, a running command and the reply streaming in">
-<img src="docs/screenshot-schedules.png" width="49%" alt="The schedules page listing active and paused cron jobs with their next and last runs">
+<img src="docs/screenshot-bot-chat.webp" width="49%" alt="A bot's chat: the user's messages in the bot's orange, a tool step, a table of backup results and a note from another bot, with the bots above the chat list">
+<img src="docs/screenshot-group-chat.webp" width="49%" alt="A group chat in which three bots plan a weekend trip together, with the roster of bots and group chats beside it">
+</p>
+<p>
+<img src="docs/screenshot-chat.webp" width="49%" alt="A chat with Hermes: tool steps, a table of folder sizes and the follow-up after cleaning up">
+<img src="docs/screenshot-schedules.webp" width="49%" alt="The schedules page listing active and paused cron jobs with their next and last runs">
 </p>
 
 ## Why it exists
@@ -19,22 +25,33 @@ Caduceus is only the frontend. Point it at the URLs of a running Hermes gateway 
 ## Features
 
 - **Chat:** streamed replies. Each tool call shows as a step on the agent's route, and you can expand it for arguments and output. Risky commands get inline approval. You can stop a run, send a message mid-run to redirect it, and attach images.
+- **Bots:** each Hermes profile is a bot with one long-running chat, compatible with Bot Mode in the Hermes desktop app, so both apps show the same bots.
+  - Every bot gets an animated face that shows whether it is idle, thinking, working, waiting for you or stuck. Pick its body and colour, or upload a picture.
+  - Create, duplicate, pin, hide and sort bots into sections. Unread markers show which bot has news.
+  - `@mention` another bot and the bot you are talking to contacts it. Replies from other bots show up as notes in the chat.
+  - Give each bot its own model, skills, toolsets, MCP servers and personality, and dock its routines (scheduled jobs) beside its chat.
+  - The chat list shows your bots above your chats, with the ones at work in front.
+- **Group chats:** two to six bots in one room. Mention one member or `@all`, reply in threads, and choose who answers: everyone, a lead who hands it on, or whoever fits best. Rooms keep going while Caduceus is closed and flag when they need you.
 - **History:** every conversation from every channel (Telegram, Matrix, terminal, schedules and more), with full-text search.
-- **Projects:** group chats and give them standing instructions. Hermes' own working folders on the host are also listed.
+- **Projects:** put related chats together and give them standing instructions. Hermes' own working folders on the host are also listed.
 - **Schedules:** create, edit, pause, run now, and view the runs of Hermes' cron jobs.
 - **Webhooks:** manage incoming webhook subscriptions.
 - **Board:** the Hermes kanban board, with drag and drop, task details and comments.
 - **Skills:** turn installed skills on or off, edit and create them, and install from the hub.
-- **Settings:** the model picker, every config section from Hermes' schema, and API keys.
+- **Settings:** the model picker, every config section from Hermes' schema, and API keys. Light and dark themes, with two dark colour schemes (Graphite and Lapis), and your messages in a bot's chat can take that bot's colour.
 
 ## How it connects
 
 ```
-browser ──▶ Caduceus relay (Bun + Elysia) ──▶ Hermes gateway API server  (chat, sessions, schedules, approvals)
-                                         └──▶ Hermes dashboard            (config, skills, board, webhooks, search)
+browser ──▶ Caduceus relay (Bun + Elysia) ──▶ Hermes gateway API server  (chat, sessions, schedules, approvals,
+                                         │                                bots under /p/<profile>/)
+                                         └──▶ Hermes dashboard            (config, skills, board, webhooks, search,
+                                                                           bot profiles, group chats)
 ```
 
 The relay serves the UI, keeps your keys server-side, and passes streams through. It also removes the cross-origin limits both Hermes APIs have when called from a browser.
+
+Bots and group chats need the dashboard connection. Caduceus reaches group chats and bot metadata over the same app socket the Hermes desktop app uses, and the relay holds that socket so the browser never sees it. Each bot is served by the gateway under its own path with its own key. When you connect a bot, Caduceus writes a fresh key into the bot's profile and keeps it server-side, in its data folder.
 
 ## Quick start with Docker
 
@@ -126,7 +143,7 @@ Relay settings:
 | `CADUCEUS_PASSWORD`          | unset                             | Password that protects Caduceus itself. Required when `HOST` is not a loopback address.           |
 | `CADUCEUS_ALLOW_NO_PASSWORD` | unset                             | Set to `1` to run on a network address without a password, when a proxy in front handles sign-in. |
 | `CADUCEUS_SECRET`            | random on each start              | Key that signs session cookies. Set it to stay signed in across restarts.                         |
-| `CADUCEUS_DATA_DIR`          | `./.data` (`/data` in Docker)     | Where the connection settings and projects are stored.                                            |
+| `CADUCEUS_DATA_DIR`          | `./.data` (`/data` in Docker)     | Where the connection settings, projects and bot keys are stored.                                  |
 | `CADUCEUS_DIST`              | `../dist` next to the server      | Folder with the built UI.                                                                         |
 
 ## Running from source
@@ -155,7 +172,7 @@ Run the compiled binary with `CADUCEUS_DIST` pointing at `dist/`.
 `desktop/webview` builds the desktop app as one executable: the relay, the built UI and a native window from [webview-bun](https://github.com/tr1ckydev/webview-bun). It does not bundle a browser; the window is the system webview (WebView2 on Windows, WebKitGTK on Linux). The relay runs in a worker on a localhost port that stays the same between launches.
 
 - `bun run desktop` runs it from source.
-- `bun run desktop:win` builds `desktop/webview/out/Caduceus-<version>-x64.exe` (about 115 MB), which keeps its data in `%APPDATA%\Caduceus`, and `Caduceus-<version>-x64-portable.zip` (about 55 MB). Unzip the zip anywhere, including a USB stick, and run `Caduceus.exe`. While the file named `portable` sits next to the exe, the connection and projects go into a `data` folder beside it. Delete that file to use `%APPDATA%\Caduceus` instead. Windows 10 needs the [WebView2 runtime](https://developer.microsoft.com/microsoft-edge/webview2/); Windows 11 ships it.
+- `bun run desktop:win` builds `desktop/webview/out/Caduceus-<version>-x64.exe` (about 115 MB), which keeps its data in `%APPDATA%\Caduceus`, and `Caduceus-<version>-x64-portable.zip` (about 55 MB). Unzip the zip anywhere, including a USB stick, and run `Caduceus.exe`. While the file named `portable` sits next to the exe, the connection, projects and bot keys go into a `data` folder beside it. Delete that file to use `%APPDATA%\Caduceus` instead. Windows 10 needs the [WebView2 runtime](https://developer.microsoft.com/microsoft-edge/webview2/); Windows 11 ships it.
 - `bun run desktop:linux` builds `desktop/webview/out/Caduceus-<version>-x86_64.AppImage` (about 50 MB). Building it needs [appimagetool](https://github.com/AppImage/appimagetool/releases) on `PATH` or in `$APPIMAGETOOL`. The AppImage does not bundle the webview; it needs GTK 4 and WebKitGTK 6.0 on the system: `sudo apt install libgtk-4-1 libwebkitgtk-6.0-4`.
 
 Both targets build from Linux. Set `CADUCEUS_DEVTOOLS=1` to get the webview's developer tools.
@@ -181,6 +198,6 @@ The UI uses hash routing and relative URLs, and has no shell-specific code. Any 
 
 ```
 src/        Vue 3 frontend (Pinia, vue-router, Tailwind v4)
-server/     Elysia relay: static files, auth, proxy to Hermes, project store
+server/     Elysia relay: static files, auth, proxy to Hermes, Hermes socket bridge, project and bot key store
 desktop/    Desktop app (webview)
 ```
