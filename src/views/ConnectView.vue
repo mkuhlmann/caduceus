@@ -105,6 +105,22 @@ function describe(p: { ok: boolean; status: number; detail?: string } | null) {
 				<p class="text-sm text-ink-2">
 					Configuration, skills, board, webhooks and full-text search. Optional, but most pages need it.
 				</p>
+				<div v-if="app.dashboard?.ok && app.liveBots !== null" class="rounded-md bg-surface-2 px-3 py-2 text-sm">
+					<p class="font-medium" :class="app.liveBots ? 'text-verdigris' : 'text-ink'">
+						{{ app.liveBots ? "Bots' chats show live" : "Bots' chats do not show live" }}
+					</p>
+					<p v-if="app.liveBots" class="mt-0.5 text-ink-2">
+						This is the Webapp the gateway serves: a bot's reasoning, steps and reply stream in as it works, and the
+						approvals it asks for show in its chat.
+					</p>
+					<p v-else class="mt-0.5 text-ink-2">
+						This dashboard runs apart from the gateway. A bot's steps appear every couple of seconds, and the approvals
+						it asks for do not reach Caduceus. To watch bots live, turn on the Webapp in Hermes (<code
+							class="rounded bg-surface-3 px-1 font-mono text-xs"
+							>webapp.enabled: true</code
+						>, port 9120) and use its address here with the same login.
+					</p>
+				</div>
 				<div>
 					<label class="label" for="dash-url">Address</label>
 					<input

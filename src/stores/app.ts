@@ -67,6 +67,8 @@ export const useApp = defineStore('app', () => {
 	const connection = ref<ConnectionInfo | null>(null)
 	const gateway = ref<Probe>(null)
 	const dashboard = ref<Probe>(null)
+	/** The dashboard can show bots' chats live, with their approvals (the Webapp); null when unknown. */
+	const liveBots = ref<boolean | null>(null)
 	const uiAuth = ref<{ required: boolean; authenticated: boolean } | null>(null)
 	const ready = ref(false)
 
@@ -83,6 +85,7 @@ export const useApp = defineStore('app', () => {
 		if (cached) {
 			gateway.value = cached.gateway
 			dashboard.value = cached.dashboard
+			liveBots.value = cached.liveBots ?? null
 			ready.value = true
 			test().catch(() => {})
 			return
@@ -92,9 +95,10 @@ export const useApp = defineStore('app', () => {
 	}
 
 	async function test() {
-		const r = await post<{ gateway: Probe; dashboard: Probe }>('ui-api/connection/test')
+		const r = await post<{ gateway: Probe; dashboard: Probe; liveBots?: boolean | null }>('ui-api/connection/test')
 		gateway.value = r.gateway
 		dashboard.value = r.dashboard
+		liveBots.value = r.liveBots ?? null
 		localStorage.setItem('caduceus.probe', JSON.stringify(r))
 		return r
 	}
@@ -122,6 +126,7 @@ export const useApp = defineStore('app', () => {
 		connection,
 		gateway,
 		dashboard,
+		liveBots,
 		uiAuth,
 		ready,
 		load,

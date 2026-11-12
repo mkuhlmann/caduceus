@@ -7,7 +7,7 @@ import { authGuard, authRoutes } from './auth'
 import { projectRoutes } from './projects'
 import { botRoutes } from './bots'
 import { botWatchRoutes } from './bot-watch'
-import { rpcRoutes } from './hermes-socket'
+import { rpcRoutes, viewerSupport } from './hermes-socket'
 import { runRoutes, trackChatStream } from './runs'
 import { embedded } from './embedded'
 import { fileResponse } from './compress'
@@ -54,10 +54,16 @@ const app = new Elysia()
 				return { ok: false, status: 0, detail: String((e as Error).message ?? e) }
 			}
 		}
-		return {
-			gateway: c.gatewayUrl ? await probe('gw', '/v1/capabilities') : null,
-			dashboard: c.dashboardUrl ? await probe('dash', '/api/status') : null,
-		}
+		const gateway = c.gatewayUrl ? await probe('gw', '/v1/capabilities') : null
+		const dashboard = c.dashboardUrl ? await probe('dash', '/api/status') : null
+		// Whether bots' chats can be watched live: only a dashboard the gateway serves (the Webapp) can show them.
+		const liveBots = dashboard?.ok
+			? await Promise.race([
+					viewerSupport().catch(() => null),
+					new Promise<null>((r) => setTimeout(() => r(null), 8000)),
+				])
+			: null
+		return { gateway, dashboard, liveBots }
 	})
 
 // Method-specific routes: Elysia ranks `.get('/*')` (static files) above `.all(...)`.
