@@ -45,6 +45,27 @@
 	color-scheme: dark;
 }
 
+/*
+  Graphite: an alternative dark scheme. Warm, near-neutral charcoal with an
+  amber in gold's place, for people who prefer their dark mode without blue.
+*/
+[data-theme='dark'][data-palette='graphite'] {
+	--bg: #1e1d1d;
+	--surface: #242323;
+	--surface-2: #2b2a2a;
+	--surface-3: #363535;
+	--line: #353434;
+	--ink: #ecebe9;
+	--ink-2: #a8a6a3;
+	--ink-3: #7b7976;
+	--gold: #f0a03c;
+	--gold-soft: #3e3123;
+	--verdigris: #5cbf94;
+	--rose: #f07a7f;
+	--rose-soft: #452b2b;
+	--focus: #7fa8ff;
+}
+
 @theme inline {
 	--font-sans: 'Geologica Variable', ui-sans-serif, system-ui, sans-serif;
 	--font-mono: 'JetBrains Mono Variable', ui-monospace, monospace;

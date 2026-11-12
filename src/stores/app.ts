@@ -27,17 +27,27 @@ export function homePath() {
 	return `/${savedStartPage()}`
 }
 
+/** The colour scheme used while the theme is dark. */
+export type DarkPalette = 'lapis' | 'graphite'
+const PALETTE_KEY = 'caduceus.darkPalette'
+const DARK_BG: Record<DarkPalette, string> = { lapis: '#151936', graphite: '#1e1d1d' }
+
 export const useApp = defineStore('app', () => {
 	const theme = ref<'system' | 'light' | 'dark'>((localStorage.getItem('caduceus.theme') as any) ?? 'system')
+	const darkPalette = ref<DarkPalette>(localStorage.getItem(PALETTE_KEY) === 'graphite' ? 'graphite' : 'lapis')
 	const media = matchMedia('(prefers-color-scheme: dark)')
 	const systemDark = ref(media.matches)
 	media.addEventListener('change', (e) => (systemDark.value = e.matches))
 
 	watchEffect(() => {
 		localStorage.setItem('caduceus.theme', theme.value)
+		localStorage.setItem(PALETTE_KEY, darkPalette.value)
 		const dark = theme.value === 'dark' || (theme.value === 'system' && systemDark.value)
 		document.documentElement.dataset.theme = dark ? 'dark' : 'light'
-		document.querySelector('meta[name=theme-color]')?.setAttribute('content', dark ? '#151936' : '#eef0f7')
+		document.documentElement.dataset.palette = darkPalette.value
+		document
+			.querySelector('meta[name=theme-color]')
+			?.setAttribute('content', dark ? DARK_BG[darkPalette.value] : '#eef0f7')
 	})
 
 	const startPage = ref<StartPage>(savedStartPage())
@@ -94,6 +104,7 @@ export const useApp = defineStore('app', () => {
 
 	return {
 		theme,
+		darkPalette,
 		startPage,
 		connection,
 		gateway,
