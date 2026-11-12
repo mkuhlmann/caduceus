@@ -1,14 +1,20 @@
 import { inflateSync } from 'node:zlib'
 
 /**
- * The main colour of a drawn face: the most common colour among its opaque pixels, so the body wins over the eyes
- * and the edges. Reads 8-bit RGB or RGBA PNGs without interlacing, which is what Hermes draws faces as; anything
- * else (a photo, another format) gives null.
+ * What a face Hermes drew for a bot looks like: its main colour and, when it is clearly one of a few plain outlines,
+ * the nearest of Caduceus's bodies. Reads 8-bit RGB or RGBA PNGs without interlacing, which is what Hermes draws
+ * faces as; anything else (a photo, another format) gives null.
  */
-export function faceColor(png: Buffer): string | null {
+export function readFace(png: Buffer): { color: string | null; shape: string | null } | null {
 	const pixels = decode(png)
 	if (!pixels) return null
-	const { rgba, channels } = pixels
+	return { color: mainColor(pixels), shape: pixels.channels === 4 ? outline(pixels) : null }
+}
+
+type Pixels = { rgba: Uint8Array; channels: number; width: number; height: number }
+
+/** The most common colour among the opaque pixels, so the body wins over the eyes and the edges. */
+function mainColor({ rgba, channels }: Pixels): string | null {
 	// Colours are counted in buckets of 16 levels per channel, so antialiased edges fall in with the body.
 	const buckets = new Map<number, { n: number; r: number; g: number; b: number }>()
 	for (let i = 0; i < rgba.length; i += channels) {
@@ -32,9 +38,49 @@ export function faceColor(png: Buffer): string | null {
 	return `#${hex(top.r)}${hex(top.g)}${hex(top.b)}`
 }
 
+/**
+ * The body a silhouette is closest to, judged from how much of its box it fills and how its width changes from top
+ * to bottom: a square, a triangle, or something round. Anything less plain (a heart, a star, a drop) gives null, and
+ * the bot keeps the body its name gives it.
+ */
+function outline({ rgba, width, height }: Pixels): string | null {
+	const rows: number[] = []
+	let [top, bottom, left, right, area] = [height, -1, width, -1, 0]
+	for (let y = 0; y < height; y++) {
+		let n = 0
+		for (let x = 0; x < width; x++) {
+			if (rgba[(y * width + x) * 4 + 3]! < 128) continue
+			n++
+			left = Math.min(left, x)
+			right = Math.max(right, x)
+		}
+		rows.push(n)
+		area += n
+		if (n) [top, bottom] = [Math.min(top, y), y]
+	}
+	const [w, h] = [right - left + 1, bottom - top + 1]
+	if (area < 64 || w < 8 || h < 8) return null
+	const fill = area / (w * h)
+	// Mean width of a band of rows, as a share of the box: 0 is the top edge, 1 the bottom.
+	const band = (from: number, to: number) => {
+		const ys = rows.slice(top + Math.floor(from * h), top + Math.ceil(to * h))
+		return ys.reduce((a, n) => a + n, 0) / Math.max(1, ys.length) / w
+	}
+	const [upper, middle, lower] = [band(0.1, 0.3), band(0.4, 0.6), band(0.7, 0.9)]
+	const aspect = w / h
+	if (fill > 0.86 && upper > 0.85 && lower > 0.85 && aspect > 0.8 && aspect < 1.25) return 'cushion'
+	// Narrow at the top and widest at the bottom, with straight-ish sides: the middle sits halfway between.
+	if (upper < 0.5 * lower && lower > 0.75 && fill > 0.4 && fill < 0.7 && Math.abs(middle - (upper + lower) / 2) < 0.12)
+		return 'clover'
+	// An ellipse fills about 79% of its box, and its top and bottom bands are equally wide.
+	if (fill > 0.72 && fill < 0.84 && Math.abs(upper - lower) < 0.12 && middle > 0.9)
+		return aspect >= 1 ? 'pebble' : 'egg'
+	return null
+}
+
 const SIGNATURE = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]
 
-function decode(png: Buffer): { rgba: Uint8Array; channels: number } | null {
+function decode(png: Buffer): Pixels | null {
 	if (png.length < 33 || SIGNATURE.some((b, i) => png[i] !== b)) return null
 	let width = 0
 	let height = 0
@@ -84,5 +130,5 @@ function decode(png: Buffer): { rgba: Uint8Array; channels: number } | null {
 			out[row + x] = v & 0xff
 		}
 	}
-	return { rgba: out, channels }
+	return { rgba: out, channels, width, height }
 }

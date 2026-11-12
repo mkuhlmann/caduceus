@@ -14,8 +14,9 @@ type BotMeta = {
 	look: BotLook | null
 	/** URL of the bot's picture, or a data URL right after picking one. */
 	image: string | null
-	/** For a bot with no face chosen here: the colour of the face Hermes drew for it. */
+	/** For a bot with no face chosen here: the colour of the face Hermes drew for it, and the body nearest its outline. */
 	faceColor?: string | null
+	faceShape?: string | null
 	hidden: boolean
 	pinned: boolean
 	sectionId: string | null
@@ -115,8 +116,12 @@ export const useBots = defineStore('bots', () => {
 				model: p.model ?? '',
 				provider: p.provider ?? '',
 				isDefault,
-				// No face chosen here: take the colour of the one Hermes drew, so the bot looks the same in both.
-				look: m?.look ?? (m?.faceColor ? { shape: '', color: nearestColor(m.faceColor) } : null),
+				// No face chosen here: take the colour and body of the one Hermes drew, so the bot looks alike in both.
+				look:
+					m?.look ??
+					(m?.faceColor || m?.faceShape
+						? { shape: m.faceShape ?? '', color: m.faceColor ? nearestColor(m.faceColor) : '' }
+						: null),
 				image: m?.image ?? null,
 				connected: isDefault || !!m?.connected,
 				skillCount: p.skill_count ?? 0,
