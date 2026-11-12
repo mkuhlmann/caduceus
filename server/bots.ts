@@ -158,8 +158,10 @@ function publicBot(p: HermesProfile) {
 	const meta = p.ui_meta?.[BOTS_KEY] ?? {}
 	const own = p.ui_meta?.[OWN_KEY] ?? {}
 	const isDefault = !!p.is_default || p.name === 'default'
-	// Desktop may keep a picture asset while showing one of its drawn faces; only a photo is the bot's picture.
-	const photo = p.has_avatar && meta.imageKind !== 'shape'
+	// A profile can carry an avatar asset that is only a drawn face (Hermes Desktop's, or one made for it), often
+	// with no record of what it is. Only a picture marked as a photo replaces Caduceus's face; Caduceus marks every
+	// picture it saves.
+	const photo = p.has_avatar && meta.imageKind === 'photo'
 	const rev = (p.ui_meta_revisions?.[BOTS_KEY] ?? 0) + '.' + (p.ui_meta_revisions?.[OWN_KEY] ?? 0)
 	return {
 		name: p.name,
