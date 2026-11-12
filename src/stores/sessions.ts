@@ -12,6 +12,9 @@ import { buildTurns, type AgentTurn, type ApprovalStep, type ToolStep, type Turn
 import { useToasts } from './toast'
 import { useProjects } from './projects'
 import { forgetTranscript, readTranscript, saveTranscript } from '@/lib/transcript-cache'
+import { fetchOlder, fetchTail, LIVE_TAIL, mergeTail, prependOlder, TAIL, type Tail } from '@/lib/transcript-pages'
+import { onRpcEvent } from '@/lib/rpc'
+import { useApp } from './app'
 
 type Live = {
 	runId?: string
@@ -140,6 +143,9 @@ export const useSessions = defineStore('sessions', () => {
 	const refreshError = reactive<Record<string, string>>({})
 	// Transcripts read from disk without their inline images: the network copy always replaces them.
 	const partial = new WeakSet<Message[]>()
+	// Chats with messages on the server older than the ones held, and those loading such a page now.
+	const older = reactive<Record<string, boolean>>({})
+	const loadingOlder = reactive<Record<string, boolean>>({})
 	const inflight = new Map<string, Promise<void>>()
 	const recent: string[] = []
 	const live = reactive<Record<string, Live>>({})
@@ -223,13 +229,41 @@ export const useSessions = defineStore('sessions', () => {
 		}
 	}
 
-	/** Take a transcript fresh from the gateway: keep the same array when nothing changed, and save it to disk. */
-	function setTranscript(id: string, ms: Message[]) {
-		delete refreshError[id]
+	/** Save the newest page of a chat to disk; older pages come from the server when scrolled to. */
+	function save(id: string) {
+		const ms = messages[id]
+		if (ms) saveTranscript(id, ms.slice(-TAIL), !!older[id] || ms.length > TAIL)
+	}
+
+	/** Lay a fresh newest page over the chat. False when it does not meet the messages held. */
+	function applyTail(id: string, tail: Tail): boolean {
 		const current = messages[id]
-		if (current && !partial.has(current) && sameTranscript(current, ms)) return
-		messages[id] = ms
-		saveTranscript(id, ms)
+		const merged = mergeTail(current, tail.ms, !tail.more)
+		if (!merged) return false
+		if (merged === tail.ms) older[id] = tail.more
+		delete refreshError[id]
+		// Keep the same array when nothing changed, so nothing re-renders.
+		if (current && !partial.has(current) && sameTranscript(current, merged)) return true
+		messages[id] = merged
+		save(id)
+		return true
+	}
+
+	/**
+	 * Bring a chat up to date by reading its newest messages. `ok` is asked again once they arrive, so a
+	 * chat that started streaming here or was closed meanwhile is left alone.
+	 */
+	async function refreshTail(id: string, { limit = TAIL, ok = (): boolean => true } = {}) {
+		let tail = await fetchTail(id, limit)
+		if (!ok() || applyTail(id, tail)) return
+		if (limit < TAIL) {
+			tail = await fetchTail(id, TAIL)
+			if (!ok() || applyTail(id, tail)) return
+		}
+		// More was written since this chat was last read than a page holds: start again from its end.
+		messages[id] = tail.ms
+		older[id] = tail.more
+		save(id)
 	}
 
 	/** Paint a chat from its copy on disk, if it is not in memory yet. */
@@ -239,7 +273,30 @@ export const useSessions = defineStore('sessions', () => {
 		if (!saved || messages[id]) return
 		if (saved.partial) partial.add(saved.messages)
 		messages[id] = saved.messages
+		older[id] = saved.more
 		touch(id)
+	}
+
+	/** Load the page of messages before the earliest one held, as the reader scrolls up to it. */
+	async function loadOlder(id: string) {
+		const held = messages[id]
+		if (!held?.length || !older[id] || loadingOlder[id]) return
+		loadingOlder[id] = true
+		try {
+			const page = await fetchOlder(id, held.length)
+			const now = messages[id]
+			if (!now) return
+			const merged = prependOlder(now, page.ms)
+			// The page held only messages already here: so much was written since the last read that the
+			// offset no longer reaches back. Catch up with the end first; the next scroll continues from there.
+			if (merged === now && page.more) return void (await refreshTail(id))
+			messages[id] = merged
+			older[id] = page.more
+		} catch (e) {
+			toasts.error(`Could not load earlier messages: ${(e as Error).message}`)
+		} finally {
+			delete loadingOlder[id]
+		}
 	}
 
 	/**
@@ -258,8 +315,7 @@ export const useSessions = defineStore('sessions', () => {
 			try {
 				await fromDisk(id)
 				if (opts.open && messages[id]) refreshing[id] = true
-				const ms = await gateway.messages(id)
-				setTranscript(id, ms)
+				await refreshTail(id)
 				touch(id)
 				if (!byId(id)) {
 					const s = await gateway.session(id).catch(() => null)
@@ -306,8 +362,19 @@ export const useSessions = defineStore('sessions', () => {
 		return !!refreshing[id]
 	}
 
+	/** The server has messages of this chat older than the ones held. */
+	function hasOlder(id: string) {
+		return !!older[id]
+	}
+
+	function isLoadingOlder(id: string) {
+		return !!loadingOlder[id]
+	}
+
 	function turnsFor(id: string): Turn[] {
-		const turns = [...turnsOf(messages[id] ?? [])]
+		const all = turnsOf(messages[id] ?? [])
+		// A page can start in the middle of the agent's work; that turn shows once its start is loaded.
+		const turns = older[id] && all[0]?.kind === 'agent' && all.length > 1 ? all.slice(1) : [...all]
 		const l = live[id]
 		if (l) {
 			turns.push({ kind: 'user', key: 'live-user', text: l.user.text, images: l.user.images })
@@ -541,20 +608,25 @@ export const useSessions = defineStore('sessions', () => {
 		if (id) followTimer = setTimeout(() => poll(id), 0)
 	}
 
-	async function poll(id: string) {
+	/** `changed`: Hermes reported a write, so read the chat even when nothing seems to be running in it. */
+	async function poll(id: string, changed = false) {
 		let next = IDLE_MS
 		try {
 			if (followed !== id || document.hidden || live[id]) return
 			await syncRuns()
 			const runId = activeRuns.value[id]
 			const stale = !runId && !unfinished(messages[id] ?? [])
-			if (stale && !remote[id]) return
-			const [status, ms] = await Promise.all([
+			if (stale && !remote[id] && !changed) return
+			const ok = () => followed === id && !live[id]
+			const [status, fresh] = await Promise.all([
 				runId ? gateway.run(runId, id).catch(() => null) : null,
-				gateway.messages(id).catch(() => null),
+				refreshTail(id, { limit: LIVE_TAIL, ok }).then(
+					() => true,
+					() => false,
+				),
 			])
-			if (followed !== id || live[id] || !ms) return
-			setTranscript(id, ms)
+			if (!ok() || !fresh) return
+			const ms = messages[id] ?? []
 			const lastAt = Number(lastOf(ms, (m) => m.timestamp)?.timestamp ?? 0)
 			const running = runId
 				? !['completed', 'failed', 'cancelled'].includes(status?.status ?? 'running')
@@ -567,7 +639,11 @@ export const useSessions = defineStore('sessions', () => {
 				await settle(id)
 			}
 		} finally {
-			if (followed === id) followTimer = setTimeout(() => poll(id), next)
+			// One loop per chat, however many reads (timer, event, tab focus) overlapped.
+			if (followed === id) {
+				clearTimeout(followTimer)
+				followTimer = setTimeout(() => poll(id), next)
+			}
 		}
 	}
 
@@ -600,14 +676,32 @@ export const useSessions = defineStore('sessions', () => {
 		if (document.hidden || !followed || live[followed]) return
 		clearTimeout(followTimer)
 		const id = followed
-		gateway
-			.messages(id)
-			.then((ms) => {
-				if (followed === id && !live[id]) setTranscript(id, ms)
-			})
-			.catch(() => {})
-			.finally(() => poll(id))
+		void poll(id, true)
 	})
+
+	// Hermes reports writes to its sessions (from any channel: terminal, Telegram, schedules) at most every 2s.
+	// The open chat reads its newest messages on each; the timers above stay as the fallback without events.
+	let changedTimer: ReturnType<typeof setTimeout> | undefined
+	let offChanged: (() => void) | undefined
+	watch(
+		() => !!useApp().dashboard?.ok,
+		(ok) => {
+			offChanged?.()
+			offChanged = ok
+				? onRpcEvent('sessions.changed', () => {
+						const id = followed
+						if (!id || live[id] || document.hidden) return
+						clearTimeout(changedTimer)
+						changedTimer = setTimeout(() => {
+							if (followed !== id) return
+							clearTimeout(followTimer)
+							void poll(id, true)
+						}, 250)
+					})
+				: undefined
+		},
+		{ immediate: true },
+	)
 
 	async function rename(id: string, title: string) {
 		await gateway.updateSession(id, { title })
@@ -633,6 +727,7 @@ export const useSessions = defineStore('sessions', () => {
 		list.value = list.value.filter((s) => s.id !== id)
 		delete botSessions[id]
 		delete messages[id]
+		delete older[id]
 		void forgetTranscript(id)
 	}
 
@@ -656,6 +751,9 @@ export const useSessions = defineStore('sessions', () => {
 		isLoading,
 		isRefreshing,
 		refreshError,
+		hasOlder,
+		isLoadingOlder,
+		loadOlder,
 		live,
 		lastError,
 		remote,

@@ -1,8 +1,8 @@
 import type { Message } from './gateway'
 
 /**
- * Transcripts saved in IndexedDB, so a chat opened after a reload paints at once from its last known
- * state while a fresh copy loads. localStorage is too small for transcripts with tool output and images.
+ * The newest part of each transcript saved in IndexedDB, so a chat opened after a reload paints at once from
+ * its last known state while a fresh copy loads. localStorage is too small for tool output and images.
  *
  * Only the most recently opened chats are kept, within a total size. Everything belongs to one gateway:
  * connecting to another one drops the lot, so its chats never show up here.
@@ -17,9 +17,10 @@ const BUDGET = 30 * 1024 * 1024
 const SLIM_OVER = 2 * 1024 * 1024
 const SKIP_OVER = 6 * 1024 * 1024
 
-type Row = { id: string; json: string; partial: boolean }
+// `more`: the chat has messages older than the saved ones, still on the server.
+type Row = { id: string; json: string; partial: boolean; more?: boolean }
 type Index = { scope: string; items: Record<string, { usedAt: number; bytes: number }> }
-export type Saved = { messages: Message[]; partial: boolean }
+export type Saved = { messages: Message[]; partial: boolean; more: boolean }
 
 let db: Promise<IDBDatabase | null> | undefined
 function open() {
@@ -94,7 +95,7 @@ export async function readTranscript(id: string): Promise<Saved | null> {
 		if (!row) return null
 		r.ix.items[id]!.usedAt = Date.now()
 		writeIndex(r.d, r.ix)
-		return { messages: JSON.parse(row.json), partial: row.partial }
+		return { messages: JSON.parse(row.json), partial: row.partial, more: !!row.more }
 	} catch {
 		return null
 	}
@@ -115,7 +116,7 @@ function withoutImages(ms: Message[]): Message[] {
 	)
 }
 
-async function write(id: string, ms: Message[]) {
+async function write(id: string, { ms, more }: Queued) {
 	const r = await ready()
 	if (!r) return
 	let json = JSON.stringify(ms)
@@ -130,7 +131,7 @@ async function write(id: string, ms: Message[]) {
 		store.delete(id)
 		delete r.ix.items[id]
 	} else {
-		store.put({ id, json, partial } satisfies Row)
+		store.put({ id, json, partial, more } satisfies Row)
 		r.ix.items[id] = { usedAt: Date.now(), bytes: json.length }
 	}
 	// Least recently opened go first, until both the count and the size fit.
@@ -147,7 +148,8 @@ async function write(id: string, ms: Message[]) {
 }
 
 // Saving waits until the browser is idle, and only the newest copy of a chat is written.
-const queued = new Map<string, Message[]>()
+type Queued = { ms: Message[]; more: boolean }
+const queued = new Map<string, Queued>()
 let scheduled = false
 const idle: (fn: () => void) => void =
 	typeof requestIdleCallback === 'function'
@@ -169,8 +171,8 @@ function flush() {
 		})
 }
 
-export function saveTranscript(id: string, ms: Message[]) {
-	queued.set(id, ms)
+export function saveTranscript(id: string, ms: Message[], more: boolean) {
+	queued.set(id, { ms, more })
 	if (!scheduled) {
 		scheduled = true
 		idle(flush)

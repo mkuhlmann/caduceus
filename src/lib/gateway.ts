@@ -39,6 +39,9 @@ export type Message = {
 	display_kind?: string
 }
 
+/** Hermes echoes the order it applied; an older backend that ignores `order` leaves it out. */
+export type MessagePagination = { limit: number; offset: number; order?: string; returned?: number }
+
 export type Job = {
 	id: string
 	name: string
@@ -149,9 +152,18 @@ export const gateway = {
 	deleteSession: (id: string) => del(`${at(id)}/api/sessions/${enc(id)}`),
 	forkSession: (id: string, title?: string) =>
 		post<{ session: Session }>(`${at(id)}/api/sessions/${enc(id)}/fork`, title ? { title } : {}).then((r) => r.session),
+	/** The whole transcript as older backends serve it: the first 500 messages, oldest first. */
 	messages: (id: string) =>
 		get<{ data: Message[] }>(`${at(id)}/api/sessions/${enc(id)}/messages${qs({ limit: 500, order: 'oldest' })}`).then(
 			(r) => r.data,
+		),
+	/**
+	 * One page of a transcript counted back from its newest message (`offset` messages back), in chronological
+	 * order. Compacted messages are included: without them a compacted chat ends at the compaction.
+	 */
+	messagesPage: (id: string, p: { limit: number; offset?: number }) =>
+		get<{ data: Message[]; pagination?: MessagePagination }>(
+			`${at(id)}/api/sessions/${enc(id)}/messages${qs({ ...p, order: 'latest', include_compacted: true })}`,
 		),
 
 	/** Runs streaming through this Caduceus server right now, by session id (any tab or device). */

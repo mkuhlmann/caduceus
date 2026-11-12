@@ -63,6 +63,9 @@ const PAGE = 30
 const limit = ref(PAGE)
 const shownTurns = computed(() => (turns.value.length > limit.value ? turns.value.slice(-limit.value) : turns.value))
 const earlier = computed(() => turns.value.length - shownTurns.value.length)
+// Older messages still on the server, loaded once the reader scrolls past everything held.
+const olderOnServer = computed(() => !!id.value && sessions.hasOlder(id.value))
+const loadingOlder = computed(() => !!id.value && sessions.isLoadingOlder(id.value))
 // Turns added to the open chat (a reply, a run elsewhere) extend the window instead of pushing old ones out.
 watch([id, () => turns.value.length], ([v, n], [was, before]) => {
 	if (v === was && before && n > before) limit.value += n - before
@@ -171,12 +174,16 @@ function scrollDown(force = false) {
 }
 const grow = new ResizeObserver(() => scrollDown())
 
-/** Add earlier turns above, keeping the reader's place. */
-function showEarlier() {
+/** Add earlier turns above, keeping the reader's place: held ones first, then a page from the server. */
+async function showEarlier() {
 	const el = scroller.value
-	if (!el || !earlier.value) return
+	const chat = id.value
+	if (!el || !chat || (!earlier.value && !olderOnServer.value)) return
 	const fromBottom = el.scrollHeight - el.scrollTop
-	limit.value += PAGE
+	// Loaded turns land above and widen the window by themselves (the watch on the turn count).
+	if (earlier.value) limit.value += PAGE
+	else await sessions.loadOlder(chat)
+	if (chat !== id.value) return
 	nextTick(() => {
 		el.scrollTop = el.scrollHeight - fromBottom
 		// Still near the top (a short page of turns): observe again so it keeps filling.
@@ -479,7 +486,14 @@ async function connectThisBot() {
 					</div>
 					<p v-else-if="!turns.length" class="text-sm text-ink-3">No messages yet. Write the first one below.</p>
 					<div v-else :class="{ 'turns-fade': fadeIn }">
-						<button v-if="earlier" ref="sentinel" class="btn-ghost mx-auto mb-2 flex" @click="showEarlier">
+						<button
+							v-if="earlier || olderOnServer"
+							ref="sentinel"
+							class="btn-ghost mx-auto mb-2 flex"
+							:disabled="loadingOlder"
+							:aria-busy="loadingOlder"
+							@click="showEarlier"
+						>
 							Show earlier messages
 						</button>
 						<template v-for="t in shownTurns" :key="t.key">
