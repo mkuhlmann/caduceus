@@ -9,6 +9,12 @@ export const router = createRouter({
 		{ path: '/', redirect: () => homePath() },
 		{ path: '/chat/:id?', name: 'chat', component: () => import('./views/ChatView.vue'), meta: { title: 'Chat' } },
 		{ path: '/bots', name: 'bots', component: () => import('./views/BotsView.vue'), meta: { title: 'Bots' } },
+		{
+			path: '/bots/rooms/:roomId',
+			name: 'room',
+			component: () => import('./views/RoomView.vue'),
+			meta: { rail: 'bots', title: 'Group chat' },
+		},
 		// A bot's chat is the chat view with the bot roster beside it.
 		{
 			path: '/bots/:name',

@@ -1,16 +1,23 @@
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, onMounted } from 'vue'
 import { Plus } from 'lucide-vue-next'
 import BotAvatar from './BotAvatar.vue'
+import RoomRow from './RoomRow.vue'
 import { useBots, type Bot, type BotSection } from '@/stores/bots'
+import { useGroups } from '@/stores/groups'
 
 /** The roster beside a bot's chat: recognise each bot by its face, see at a glance which ones are busy. */
-const props = defineProps<{ active?: string }>()
+const props = defineProps<{ active?: string; activeRoom?: string }>()
 const emit = defineEmits<{ navigate: [] }>()
 const bots = useBots()
+const groups = useGroups()
+onMounted(() => {
+	if (!groups.loaded) void groups.load()
+	groups.listen()
+})
 
 // Hidden bots stay out, unless it is the one open right now.
-const groups = computed(() => {
+const buckets = computed(() => {
 	const visible = bots.bots.filter((b) => !b.hidden || b.name === props.active)
 	const out: { section: BotSection | null; bots: Bot[] }[] = bots.sections
 		.map((s) => ({ section: s as BotSection | null, bots: visible.filter((b) => b.sectionId === s.id) }))
@@ -30,9 +37,9 @@ const groups = computed(() => {
 			</RouterLink>
 		</div>
 		<nav class="min-h-0 flex-1 overflow-y-auto px-2 pb-3" aria-label="Bots">
-			<template v-for="g in groups" :key="g.section?.id ?? 'none'">
-				<p v-if="groups.length > 1" class="px-2 pt-3 pb-1 text-xs font-medium text-ink-3">
-					{{ g.section?.name ?? 'Unassigned' }}
+			<template v-for="g in buckets" :key="g.section?.id ?? 'none'">
+				<p v-if="buckets.length > 1 || groups.rooms.length" class="px-2 pt-3 pb-1 text-xs font-medium text-ink-3">
+					{{ g.section?.name ?? (bots.sections.length ? 'Unassigned' : 'Bots') }}
 				</p>
 				<RouterLink
 					v-for="b in g.bots"
@@ -62,6 +69,17 @@ const groups = computed(() => {
 					</span>
 					<span v-if="bots.unread(b.name)" class="size-2 shrink-0 rounded-full bg-focus" aria-label="Unread" />
 				</RouterLink>
+			</template>
+			<template v-if="groups.rooms.length">
+				<p class="px-2 pt-3 pb-1 text-xs font-medium text-ink-3">Group chats</p>
+				<RoomRow
+					v-for="r in groups.rooms"
+					:key="r.room_id"
+					:room="r"
+					compact
+					:active="r.room_id === activeRoom"
+					@navigate="emit('navigate')"
+				/>
 			</template>
 		</nav>
 	</aside>

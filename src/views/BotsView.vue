@@ -1,19 +1,24 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { Eye, EyeOff, FolderPlus, MoreHorizontal, Plus, Search } from 'lucide-vue-next'
+import { Eye, EyeOff, FolderPlus, MoreHorizontal, Plus, Search, UsersRound } from 'lucide-vue-next'
 import PageHeader from '@/components/PageHeader.vue'
 import EmptyState from '@/components/EmptyState.vue'
 import Skeleton from '@/components/Skeleton.vue'
 import BotRow from '@/components/bots/BotRow.vue'
 import NewBotModal from '@/components/bots/NewBotModal.vue'
 import BotSettingsModal from '@/components/bots/BotSettingsModal.vue'
+import NewGroupModal from '@/components/bots/NewGroupModal.vue'
+import RoomRow from '@/components/bots/RoomRow.vue'
+import { useGroups } from '@/stores/groups'
 import { useApp } from '@/stores/app'
 import { useBots, type Bot, type BotSection } from '@/stores/bots'
 import { useToasts } from '@/stores/toast'
 
 const app = useApp()
 const bots = useBots()
+const groupStore = useGroups()
+const creatingGroup = ref(false)
 const toasts = useToasts()
 const route = useRoute()
 const router = useRouter()
@@ -31,7 +36,12 @@ onBeforeUnmount(() => document.removeEventListener('click', closeSectionMenu))
 // A cold start may learn only after mounting that the dashboard is reachable.
 watch(
 	() => app.hasDashboard(),
-	(ok) => ok && bots.load(),
+	(ok) => {
+		if (!ok) return
+		void bots.load()
+		void groupStore.load()
+		groupStore.listen()
+	},
 	{ immediate: true },
 )
 // "New bot" from the roster beside a chat lands here with the form open.
@@ -44,6 +54,11 @@ watch(
 	},
 	{ immediate: true },
 )
+
+const shownRooms = computed(() => {
+	const q = query.value.trim().toLowerCase()
+	return groupStore.rooms.filter((r) => !q || r.name.toLowerCase().includes(q))
+})
 
 const hiddenCount = computed(() => bots.bots.filter((b) => b.hidden).length)
 // A hidden bot that wrote something badges the eye, so nothing goes unnoticed.
@@ -127,6 +142,13 @@ async function onDrop(e: DragEvent, section: BotSection | null) {
 			title="Bots"
 			subtitle="Each bot is a Hermes profile with its own memory, skills, model and conversation."
 		>
+			<button
+				v-if="app.hasDashboard() && groupStore.available && bots.bots.length >= 2"
+				class="btn-outline"
+				@click="creatingGroup = true"
+			>
+				<UsersRound :size="16" /> New group chat
+			</button>
 			<button v-if="app.hasDashboard()" class="btn-primary" @click="creating = true">
 				<Plus :size="16" /> New bot
 			</button>
@@ -223,7 +245,17 @@ async function onDrop(e: DragEvent, section: BotSection | null) {
 						Drag a bot here, or use Move to section in its menu.
 					</p>
 				</section>
-				<p v-if="query && !shown.length" class="mt-4 text-sm text-ink-3">No bot matches “{{ query }}”.</p>
+				<section v-if="shownRooms.length" class="max-w-3xl">
+					<h2 class="mt-5 px-2 py-1 text-sm font-semibold text-ink-2">
+						Group chats <span class="font-normal text-ink-3">{{ shownRooms.length }}</span>
+					</h2>
+					<ul class="divide-y divide-line">
+						<li v-for="r in shownRooms" :key="r.room_id" class="py-1"><RoomRow :room="r" /></li>
+					</ul>
+				</section>
+				<p v-if="query && !shown.length && !shownRooms.length" class="mt-4 text-sm text-ink-3">
+					No bot matches “{{ query }}”.
+				</p>
 				<p v-if="bots.bots.length < 2" class="mt-6 max-w-[60ch] text-sm text-ink-2">
 					Hermes is your only bot so far. Create one for a job you hand out often, like research or reviewing code, and
 					give it its own instructions and model.
@@ -232,6 +264,7 @@ async function onDrop(e: DragEvent, section: BotSection | null) {
 		</div>
 
 		<NewBotModal v-if="creating" @close="creating = false" />
+		<NewGroupModal v-if="creatingGroup" @close="creatingGroup = false" />
 		<BotSettingsModal v-if="editing" :bot="editing" @close="editing = null" />
 	</div>
 </template>

@@ -26,6 +26,8 @@ const props = defineProps<{
 	mentions?: MentionBot[]
 	activeBot?: string
 	extraMentions?: MentionExtra[]
+	/** Group chats take text only. */
+	noImages?: boolean
 }>()
 const emit = defineEmits<{ send: [text: string, images: string[]]; stop: [] }>()
 const toasts = useToasts()
@@ -162,7 +164,17 @@ function onDrop(e: DragEvent) {
 	if (e.dataTransfer?.files.length) addFiles(e.dataTransfer.files)
 }
 
-defineExpose({ focus: () => area.value?.focus() })
+/** Start the draft with `prefix` (e.g. `@handle `), keeping what is typed after it, and put the caret at the end. */
+function seed(prefix: string) {
+	const rest = text.value.replace(/^@[a-z0-9_-]+\s+/i, '')
+	text.value = prefix + rest
+	nextTick(() => {
+		area.value?.focus()
+		area.value?.setSelectionRange(text.value.length, text.value.length)
+	})
+}
+
+defineExpose({ focus: () => area.value?.focus(), seed })
 </script>
 
 <template>
@@ -233,6 +245,7 @@ defineExpose({ focus: () => area.value?.focus() })
 		<div class="flex items-center justify-between gap-2 px-2 pb-2">
 			<div class="flex items-center gap-1">
 				<button
+					v-if="!noImages"
 					type="button"
 					class="icon-btn"
 					aria-label="Attach image"
