@@ -22,6 +22,7 @@ Remote web UI for [Hermes Agent](https://github.com/NousResearch/hermes-agent). 
 - `bunx vue-tsc --noEmit` typechecks the frontend.
 - `bun fmt` formats everything (config in `bunfig.toml`: tabs, single quotes, no semicolons, width 120). Run it after editing; `bun fmt --check` must pass. Don't add a `fmt` script to package.json, because `bun fmt` would run it instead of the formatter.
 - The connection is configured in `.env` (`HERMES_GATEWAY_URL`, `HERMES_API_KEY`, `HERMES_DASHBOARD_URL`, `HERMES_DASHBOARD_USERNAME`/`PASSWORD` or `HERMES_DASHBOARD_TOKEN`).
+- Screenshots and demos use `scripts/mock-relay.ts`, a relay with made-up data on its own port, never the live instance; its header explains running it and capturing 2x screenshots.
 - Against the live instance, read-only probing is fine, e.g. `curl -s localhost:7811/ui-api/dash/api/skills`. Never mutate real user data (jobs, skills, config, tasks, webhooks) while testing. Create clearly named test objects and delete them afterwards.
 
 ## Design system ("lapis & gold")
