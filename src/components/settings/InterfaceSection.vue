@@ -15,11 +15,11 @@ const app = useApp()
 
 		<label class="label mt-6" for="ui-dark-palette">Dark colours</label>
 		<select id="ui-dark-palette" v-model="app.darkPalette" class="field">
-			<option value="lapis">Lapis</option>
 			<option value="graphite">Graphite</option>
+			<option value="lapis">Lapis</option>
 		</select>
 		<p class="mt-1 text-sm text-ink-2">
-			Used whenever the theme is dark. Lapis is deep blue with gold, Graphite is warm charcoal with amber. Saved in this
+			Used whenever the theme is dark. Graphite is warm charcoal with amber, Lapis is deep blue with gold. Saved in this
 			browser only.
 		</p>
 

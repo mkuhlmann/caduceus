@@ -1,5 +1,5 @@
 import { defineStore } from 'pinia'
-import { ref, watchEffect } from 'vue'
+import { ref, watch, watchEffect } from 'vue'
 import { get, put, post } from '@/lib/http'
 import { setTranscriptScope } from '@/lib/transcript-cache'
 
@@ -29,19 +29,20 @@ export function homePath() {
 
 /** The colour scheme used while the theme is dark. */
 export type DarkPalette = 'lapis' | 'graphite'
-const PALETTE_KEY = 'caduceus.darkPalette'
+const PALETTE_KEY = 'caduceus.darkColours'
 const DARK_BG: Record<DarkPalette, string> = { lapis: '#151936', graphite: '#1e1d1d' }
 
 export const useApp = defineStore('app', () => {
 	const theme = ref<'system' | 'light' | 'dark'>((localStorage.getItem('caduceus.theme') as any) ?? 'system')
-	const darkPalette = ref<DarkPalette>(localStorage.getItem(PALETTE_KEY) === 'graphite' ? 'graphite' : 'lapis')
+	const darkPalette = ref<DarkPalette>(localStorage.getItem(PALETTE_KEY) === 'lapis' ? 'lapis' : 'graphite')
+	// Saved only once chosen, so people who never pick one follow the default.
+	watch(darkPalette, (v) => localStorage.setItem(PALETTE_KEY, v))
 	const media = matchMedia('(prefers-color-scheme: dark)')
 	const systemDark = ref(media.matches)
 	media.addEventListener('change', (e) => (systemDark.value = e.matches))
 
 	watchEffect(() => {
 		localStorage.setItem('caduceus.theme', theme.value)
-		localStorage.setItem(PALETTE_KEY, darkPalette.value)
 		const dark = theme.value === 'dark' || (theme.value === 'system' && systemDark.value)
 		document.documentElement.dataset.theme = dark ? 'dark' : 'light'
 		document.documentElement.dataset.palette = darkPalette.value
