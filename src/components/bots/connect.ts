@@ -27,3 +27,17 @@ export async function connectBot(bot: Bot) {
 		return false
 	}
 }
+
+/**
+ * The bot's gateway rejected the key Caduceus keeps: another app (another Caduceus, the desktop app) has since given
+ * it a key of its own. Offer to take the bot back with a fresh key. False when declined; throws when it fails.
+ */
+export async function reconnectBot(bot: Bot) {
+	const ok = confirm(
+		`${bot.displayName} no longer accepts the key Caduceus keeps for it. Another app, such as another Caduceus or the desktop app, gave it a new one. Connect it again with a fresh key? That app then needs to reconnect it.`,
+	)
+	if (!ok) return false
+	await useBots().connect(bot.name, true)
+	useToasts().push('Bot reconnected')
+	return true
+}

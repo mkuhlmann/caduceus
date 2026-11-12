@@ -21,7 +21,8 @@ import RoutinesPanel from '@/components/bots/RoutinesPanel.vue'
 import MentionText from '@/components/chat/MentionText.vue'
 import { mentionNote, parseBotNotice, parseSystemNotice, resolveMentions, stripMentionNote } from '@/lib/mentions'
 import { COLORS, STATE_LABELS, messageFill, resolveLook } from '@/lib/avatar'
-import { connectBot } from '@/components/bots/connect'
+import { connectBot, reconnectBot } from '@/components/bots/connect'
+import { ApiError } from '@/lib/http'
 
 const route = useRoute()
 const router = useRouter()
@@ -214,6 +215,18 @@ watch(content, (el, old) => {
 	if (el) grow.observe(el)
 })
 
+/** The bot's Bot Chat; when its gateway turns down Caduceus's key, offer to reconnect it and try once more. */
+async function startBotChat(name: string) {
+	try {
+		return await bots.ensureChat(name)
+	} catch (e) {
+		const b = bot.value
+		if (e instanceof ApiError && e.status === 401 && b && !b.isDefault && (await reconnectBot(b)))
+			return await bots.ensureChat(name)
+		throw e
+	}
+}
+
 async function send(text: string, images: string[]) {
 	// A Bot Chat is one forever-conversation: /new would fork it, so it compacts instead (as in Hermes Desktop).
 	if (botName.value && !botSession.value && /^\/(new|reset)\s*$/.test(text.trim()) && !images.length) {
@@ -238,7 +251,7 @@ async function send(text: string, images: string[]) {
 	if (!target && botName.value) {
 		creating.value = true
 		try {
-			target = await bots.ensureChat(botName.value)
+			target = await startBotChat(botName.value)
 		} catch (e) {
 			toasts.error(`Could not start a chat with this bot: ${(e as Error).message}`)
 			return
