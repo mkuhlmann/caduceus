@@ -1,6 +1,6 @@
 import { getConnection, onConnectionChange, type Connection } from './config'
 import { isChatStream } from './runs'
-import { botKey } from './bots'
+import { botKey, refreshBotKey } from './bots'
 import { finishJson } from './compress'
 
 /** `/p/<profile>/…`: a request for one bot (a Hermes profile) on the multiplexed gateway. */
@@ -186,6 +186,15 @@ export async function relay(target: 'gw' | 'dash', path: string, req: Request): 
 	try {
 		res = await send(false)
 		if (res.status === 401 && target === 'dash' && !c.dashboardToken) res = await send(true)
+		// A bot that turns its key down was given a new one elsewhere: adopt that one and try once more.
+		if (res.status === 401 && bot) {
+			const fresh = await refreshBotKey(decodeURIComponent(bot))
+			if (fresh) {
+				await res.body?.cancel()
+				gatewayKey = fresh
+				res = await send(false)
+			}
+		}
 		if (target === 'dash') absorbCookies(res)
 	} catch (e) {
 		if ((e as Error).name === 'AbortError') return new Response(null, { status: 499 })

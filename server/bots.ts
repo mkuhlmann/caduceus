@@ -8,8 +8,9 @@ import { readFace } from './face-color'
 
 /**
  * Hermes bots are profiles. The dashboard creates and deletes them; the multiplexed gateway serves each one under
- * `/p/<profile>/` with that profile's own API_SERVER_KEY, which Caduceus mints when it connects a bot and keeps
- * here, server-side.
+ * `/p/<profile>/` with that profile's own API_SERVER_KEY, which Caduceus keeps here, server-side. Connecting a bot
+ * adopts the key it already has (read through the dashboard's reveal), so Caduceus shares it with Hermes Desktop and
+ * other Caduceus instances; only a bot without one, or one whose key cannot be read, gets a fresh key.
  *
  * Everything a bot looks like lives in Hermes, in the profile's `ui_meta` (written over the Hermes socket), so
  * Caduceus and Hermes Desktop show the same bot:
@@ -242,13 +243,53 @@ async function settle(list: HermesProfile[]) {
 	}
 }
 
+function remember(name: string, key: string) {
+	;(local[name] ??= { updatedAt: Date.now() }).key = key
+	local[name]!.updatedAt = Date.now()
+	persist()
+}
+
 /** Give the bot a fresh gateway key in its own `.env` and remember it. */
 async function connect(name: string) {
 	const key = randomBytes(24).toString('hex')
 	await dash('PUT', `/api/env?profile=${encodeURIComponent(name)}`, { key: KEY_VAR, value: key, profile: name })
-	;(local[name] ??= { updatedAt: Date.now() }).key = key
-	local[name]!.updatedAt = Date.now()
-	persist()
+	remember(name, key)
+}
+
+/**
+ * The gateway key the bot has now, through the dashboard's reveal (rate limited to a few a minute, and logged by
+ * Hermes). Null when it has none or the dashboard will not say.
+ */
+async function currentKey(name: string): Promise<string | null> {
+	try {
+		const r = await dash<{ value?: unknown }>('POST', `/api/env/reveal?profile=${encodeURIComponent(name)}`, {
+			key: KEY_VAR,
+			profile: name,
+		})
+		return typeof r?.value === 'string' && r.value ? r.value : null
+	} catch {
+		return null
+	}
+}
+
+const REFRESH_GAP = 30_000
+const refreshing = new Map<string, { at: number; done: Promise<string | undefined> }>()
+
+/**
+ * The bot's gateway turned down the key Caduceus keeps: someone (Hermes Desktop, another Caduceus) has given it a
+ * new one. Adopt that one, if it differs, and hand it back for a retry. At most one look per bot every 30 seconds,
+ * so a key the gateway rejects for another reason does not burn through the dashboard's reveal limit.
+ */
+export function refreshBotKey(name: string): Promise<string | undefined> {
+	const last = refreshing.get(name)
+	if (last && Date.now() - last.at < REFRESH_GAP) return last.done
+	const done = currentKey(name).then((key) => {
+		if (!key || key === local[name]?.key) return undefined
+		remember(name, key)
+		return key
+	})
+	refreshing.set(name, { at: Date.now(), done })
+	return done
 }
 
 async function one(name: string) {
@@ -509,14 +550,19 @@ export const botRoutes = new Elysia({ prefix: '/ui-api/bots' })
 	.post('/:name/connect', async ({ params, body, set }) => {
 		if (params.name === 'default') return fail(set, new BotError(400, 'Hermes itself uses the connection key.'))
 		try {
-			// A key someone else set (the desktop app, a peer) is replaced only when asked to.
+			// A key someone else set (the desktop app, a peer) is shared rather than replaced; replacing it, which locks
+			// them out, happens only when asked to, after the key could not be read.
 			if (!(body as any)?.replace) {
 				const env = await dash<Record<string, { is_set?: boolean }>>(
 					'GET',
 					`/api/env?profile=${encodeURIComponent(params.name)}`,
 				)
-				if (env?.[KEY_VAR]?.is_set)
-					return fail(set, new BotError(409, 'This bot already has a gateway key.', 'key_exists'))
+				if (env?.[KEY_VAR]?.is_set) {
+					const key = await currentKey(params.name)
+					if (!key) return fail(set, new BotError(409, 'This bot already has a gateway key.', 'key_exists'))
+					remember(params.name, key)
+					return await one(params.name)
+				}
 			}
 			await connect(params.name)
 			return await one(params.name)

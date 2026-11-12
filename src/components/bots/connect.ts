@@ -3,8 +3,9 @@ import { useBots, type Bot } from '@/stores/bots'
 import { useToasts } from '@/stores/toast'
 
 /**
- * Let Caduceus talk to a bot made elsewhere (the Hermes desktop app, the terminal). Caduceus gives it a gateway
- * key of its own; when the bot already has one, other apps may rely on it, so replacing it asks first.
+ * Let Caduceus talk to a bot made elsewhere (the Hermes desktop app, the terminal). A bot with a gateway key keeps it
+ * and Caduceus shares it; one without gets a new key. Only when Caduceus cannot read the bot's key does it offer to
+ * replace it, which locks out the apps that use the old one, so that asks first.
  */
 export async function connectBot(bot: Bot) {
 	const bots = useBots()
@@ -15,7 +16,7 @@ export async function connectBot(bot: Bot) {
 		} catch (e) {
 			if (!(e instanceof ApiError && e.code === 'key_exists')) throw e
 			const ok = confirm(
-				`${bot.displayName} already has a gateway key. Replace it with one Caduceus keeps? Apps using the old key, such as a peer Hermes, need the new one afterwards.`,
+				`${bot.displayName} already has a gateway key, but Hermes would not show it to Caduceus. Replace it with a new one? Apps using the old key, such as Hermes Desktop or another Caduceus, need to reconnect it afterwards.`,
 			)
 			if (!ok) return false
 			await bots.connect(bot.name, true)
@@ -29,12 +30,13 @@ export async function connectBot(bot: Bot) {
 }
 
 /**
- * The bot's gateway rejected the key Caduceus keeps: another app (another Caduceus, the desktop app) has since given
- * it a key of its own. Offer to take the bot back with a fresh key. False when declined; throws when it fails.
+ * The bot's gateway rejected the key Caduceus keeps, and the relay could not pick up the bot's current one (it
+ * adopts a key another app set on its own). Offer to give the bot a fresh key. False when declined; throws when it
+ * fails.
  */
 export async function reconnectBot(bot: Bot) {
 	const ok = confirm(
-		`${bot.displayName} no longer accepts the key Caduceus keeps for it. Another app, such as another Caduceus or the desktop app, gave it a new one. Connect it again with a fresh key? That app then needs to reconnect it.`,
+		`${bot.displayName} no longer accepts the key Caduceus keeps for it, and Hermes would not show Caduceus its current one. Give it a new key? Apps using the current key, such as Hermes Desktop or another Caduceus, then need to reconnect it.`,
 	)
 	if (!ok) return false
 	await useBots().connect(bot.name, true)
