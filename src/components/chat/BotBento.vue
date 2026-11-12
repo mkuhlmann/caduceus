@@ -9,8 +9,8 @@ import { useGroups, type Room } from '@/stores/groups'
 
 /**
  * The bots above the chat list, as an adaptive bento: a bot at work or waiting for you, and a group chat with
- * news, get a wide card with a status line; every other bot is a small tile. It stays put while the chats scroll,
- * so it is capped at three rows; the rest are one tap away under "All bots".
+ * news, get a wide card with a status line; every other bot is a small tile. It heads the chat list and scrolls
+ * away with it, capped at three rows; the rest are one tap away under "All bots".
  */
 const props = defineProps<{ filter?: string }>()
 const emit = defineEmits<{ navigate: [] }>()
@@ -114,7 +114,7 @@ const spare = computed(() => !props.filter && items.value.reduce((n, i) => n + i
 </script>
 
 <template>
-	<section v-if="shown && (items.length || !filter)" class="border-b border-line px-3 pb-2.5" aria-label="Bots">
+	<section v-if="shown && (items.length || !filter)" class="px-1 pt-1" aria-label="Bots">
 		<div class="flex items-center gap-1 px-1 pt-1 pb-1.5">
 			<button
 				class="flex items-center gap-1 rounded text-xs font-medium text-ink-3 hover:text-ink-2"

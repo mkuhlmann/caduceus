@@ -78,9 +78,9 @@ function newChat() {
 			<Search :size="15" class="pointer-events-none absolute top-2.5 left-5.5 text-ink-3" />
 			<input v-model="filter" class="field pl-8" placeholder="Filter chats" aria-label="Filter chats" />
 		</div>
-		<BotBento :filter="filter" @navigate="emit('navigate')" />
 
 		<div class="min-h-0 flex-1 overflow-y-auto px-2 pb-4">
+			<BotBento :filter="filter" @navigate="emit('navigate')" />
 			<p v-if="sessions.listError" class="px-2 py-3 text-sm text-rose">{{ sessions.listError }}</p>
 			<div
 				v-else-if="!sessions.list.length && sessions.loadingList"
