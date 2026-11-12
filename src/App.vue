@@ -1,6 +1,6 @@
 <script setup lang="ts">
-import { onMounted } from 'vue'
-import { useRouter } from 'vue-router'
+import { onMounted, ref } from 'vue'
+import { useRouter, type RouteLocationNormalized } from 'vue-router'
 import { useApp } from '@/stores/app'
 import AppRail from '@/components/AppRail.vue'
 import Toasts from '@/components/Toasts.vue'
@@ -8,6 +8,14 @@ import LoginView from '@/views/LoginView.vue'
 
 const app = useApp()
 const router = useRouter()
+
+// Pages that share a frame (the chat list beside a chat, a bot chat or a group chat) are one page: the view
+// stays mounted, and moving between them does not play the page entrance.
+const frameOf = (r: RouteLocationNormalized) => (r.meta.frame as string | undefined) ?? String(r.name ?? '')
+const pageTransition = ref('page')
+router.beforeEach((to, from) => {
+	pageTransition.value = from.matched.length && frameOf(from) === frameOf(to) ? 'none' : 'page'
+})
 
 onMounted(async () => {
 	try {
@@ -31,8 +39,8 @@ onMounted(async () => {
 		<AppRail />
 		<main class="min-h-0 min-w-0 flex-1 overflow-hidden">
 			<RouterView v-slot="{ Component }">
-				<Transition name="page">
-					<component :is="Component" :key="$route.name" />
+				<Transition :name="pageTransition">
+					<component :is="Component" :key="frameOf($route)" />
 				</Transition>
 			</RouterView>
 		</main>

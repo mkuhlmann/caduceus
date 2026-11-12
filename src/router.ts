@@ -7,33 +7,39 @@ export const router = createRouter({
 	history: createWebHashHistory(),
 	routes: [
 		{ path: '/', redirect: () => homePath() },
-		// A bot's chat and a group chat opened from the chat list keep the chat list beside them.
+		// A bot's chat and a group chat opened from the chat list keep the chat list beside them. Routes that share
+		// a `frame` are one page to the reader: moving between them swaps the conversation, not the page.
 		{
 			path: '/chat/bot/:name',
 			name: 'chat-bot',
 			component: () => import('./views/ChatView.vue'),
-			meta: { rail: 'chat', title: 'Chat' },
+			meta: { rail: 'chat', frame: 'chats', title: 'Chat' },
 		},
 		{
 			path: '/chat/room/:roomId',
 			name: 'chat-room',
 			component: () => import('./views/RoomView.vue'),
-			meta: { rail: 'chat', title: 'Group chat' },
+			meta: { rail: 'chat', frame: 'chats', title: 'Group chat' },
 		},
-		{ path: '/chat/:id?', name: 'chat', component: () => import('./views/ChatView.vue'), meta: { title: 'Chat' } },
+		{
+			path: '/chat/:id?',
+			name: 'chat',
+			component: () => import('./views/ChatView.vue'),
+			meta: { frame: 'chats', title: 'Chat' },
+		},
 		{ path: '/bots', name: 'bots', component: () => import('./views/BotsView.vue'), meta: { title: 'Bots' } },
 		{
 			path: '/bots/rooms/:roomId',
 			name: 'room',
 			component: () => import('./views/RoomView.vue'),
-			meta: { rail: 'bots', title: 'Group chat' },
+			meta: { rail: 'bots', frame: 'bot-chats', title: 'Group chat' },
 		},
 		// A bot's chat is the chat view with the bot roster beside it.
 		{
 			path: '/bots/:name',
 			name: 'bot',
 			component: () => import('./views/ChatView.vue'),
-			meta: { rail: 'bots', title: 'Bots' },
+			meta: { rail: 'bots', frame: 'bot-chats', title: 'Bots' },
 		},
 		{
 			path: '/history',
