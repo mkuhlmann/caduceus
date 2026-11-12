@@ -30,6 +30,7 @@ export function homePath() {
 /** The colour scheme used while the theme is dark. */
 export type DarkPalette = 'lapis' | 'graphite'
 const PALETTE_KEY = 'caduceus.darkColours'
+const TINT_KEY = 'caduceus.tintMessages'
 const DARK_BG: Record<DarkPalette, string> = { lapis: '#151936', graphite: '#1e1d1d' }
 
 export const useApp = defineStore('app', () => {
@@ -50,6 +51,10 @@ export const useApp = defineStore('app', () => {
 			.querySelector('meta[name=theme-color]')
 			?.setAttribute('content', dark ? DARK_BG[darkPalette.value] : '#eef0f7')
 	})
+
+	// Your own messages in a bot's chat take the bot's colour.
+	const tintMessages = ref(localStorage.getItem(TINT_KEY) !== 'off')
+	watch(tintMessages, (v) => localStorage.setItem(TINT_KEY, v ? 'on' : 'off'))
 
 	const startPage = ref<StartPage>(savedStartPage())
 	watchEffect(() => localStorage.setItem(START_KEY, startPage.value))
@@ -106,6 +111,7 @@ export const useApp = defineStore('app', () => {
 	return {
 		theme,
 		darkPalette,
+		tintMessages,
 		startPage,
 		connection,
 		gateway,

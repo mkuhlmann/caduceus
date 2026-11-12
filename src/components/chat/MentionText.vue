@@ -9,6 +9,8 @@ import { nameForms } from '@/lib/mentions'
 const props = defineProps<{
 	text: string
 	bots: { name: string; handle: string; title: string }[]
+	/** On a coloured fill the accent would clash, so tags keep the text colour and only get weight. */
+	onFill?: boolean
 }>()
 
 const known = computed(() => {
@@ -39,7 +41,7 @@ const parts = computed(() => {
 <template>
 	<span
 		><template v-for="(p, i) in parts" :key="i"
-			><span v-if="p.mention" class="font-medium text-focus">{{ p.text }}</span
+			><span v-if="p.mention" :class="onFill ? 'font-semibold' : 'font-medium text-focus'">{{ p.text }}</span
 			><template v-else>{{ p.text }}</template></template
 		></span
 	>

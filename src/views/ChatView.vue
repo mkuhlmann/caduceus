@@ -20,7 +20,7 @@ import BotSettingsModal from '@/components/bots/BotSettingsModal.vue'
 import RoutinesPanel from '@/components/bots/RoutinesPanel.vue'
 import MentionText from '@/components/chat/MentionText.vue'
 import { mentionNote, parseBotNotice, parseSystemNotice, resolveMentions, stripMentionNote } from '@/lib/mentions'
-import { STATE_LABELS } from '@/lib/avatar'
+import { COLORS, STATE_LABELS, messageFill, resolveLook } from '@/lib/avatar'
 import { connectBot } from '@/components/bots/connect'
 
 const route = useRoute()
@@ -316,6 +316,10 @@ function userView(text: string) {
 	}
 	return { notice: null, from: undefined, text: stripMentionNote(text) }
 }
+// In a bot's chat your own messages can take the bot's colour (Settings > Interface).
+const messageTint = computed(() =>
+	bot.value && app.tintMessages ? messageFill(COLORS[resolveLook(bot.value.name, bot.value.look).color]!) : undefined,
+)
 const shownModel = computed(() => (bot.value ? bot.value.model : model.value))
 const connectingBot = ref(false)
 async function connectThisBot() {
@@ -544,7 +548,11 @@ async function connectThisBot() {
 								class="my-6 flex justify-end"
 								:class="{ 'turn-sent': t.key === 'live-user' }"
 							>
-								<div class="max-w-[85%] rounded-2xl rounded-br-md bg-surface-2 px-4 py-2.5">
+								<div
+									class="max-w-[85%] rounded-2xl rounded-br-md px-4 py-2.5"
+									:class="messageTint ? 'text-white' : 'bg-surface-2'"
+									:style="messageTint ? { background: messageTint } : undefined"
+								>
 									<div v-if="t.images.length" class="mb-2 flex flex-wrap gap-2">
 										<img
 											v-for="(src, i) in t.images"
@@ -555,7 +563,7 @@ async function connectThisBot() {
 										/>
 									</div>
 									<p class="whitespace-pre-wrap">
-										<MentionText :text="userView(t.text).text" :bots="bots.bots" />
+										<MentionText :text="userView(t.text).text" :bots="bots.bots" :on-fill="!!messageTint" />
 									</p>
 								</div>
 							</div>

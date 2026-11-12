@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { useApp } from '@/stores/app'
+import ToggleSwitch from './ToggleSwitch.vue'
 const app = useApp()
 </script>
 
@@ -21,6 +22,14 @@ const app = useApp()
 		<p class="mt-1 text-sm text-ink-2">
 			Used whenever the theme is dark. Graphite is warm charcoal with amber, Lapis is deep blue with gold. Saved in this
 			browser only.
+		</p>
+
+		<div class="mt-6 flex items-center gap-3">
+			<ToggleSwitch v-model="app.tintMessages" label="Colour my messages in bot chats" />
+			<span class="text-sm font-medium">Colour my messages in bot chats</span>
+		</div>
+		<p class="mt-1 text-sm text-ink-2">
+			In a bot's chat, your messages take that bot's colour. Saved in this browser only.
 		</p>
 
 		<label class="label mt-6" for="ui-start">Start page</label>
