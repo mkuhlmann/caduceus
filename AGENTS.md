@@ -13,6 +13,13 @@ Remote web UI for [Hermes Agent](https://github.com/NousResearch/hermes-agent). 
 - API clients:
   - `src/lib/gateway.ts` and `src/lib/dashboard.ts`.
   - Fetch helpers are in `src/lib/http.ts` (`get`/`post`/`put`/`patch`/`del`/`qs`). Errors are thrown as `ApiError`, with `.status` and `.code`.
+- A chat's running turn:
+  - Callers read `runOf(id)`, `faceOf(id)` and `isRunning(id)` from the sessions store, never its internal maps.
+  - `src/lib/live-tail.ts` decides where the saved transcript stops and the running turn starts.
+  - `TurnWriter` (`src/lib/turn-writer.ts`) is the only place events become steps, from the chat stream and from the Hermes socket. Approvals and clarify questions carry `via`: where their answer goes.
+  - `src/lib/bot-watch.ts` watches a Bot Chat and tells its turns apart by generation. A turn sent from here takes its events with `claim`.
+  - A read that repeats goes through `poller` (`src/lib/poller.ts`), not a hand-rolled timer.
+- Domain words are in `GLOSSARY.md`; decisions not to revisit are in `docs/adr/`.
 - Hermes source for reference: `/tmp/hermes-src/hermes-agent` (may be missing; it's a shallow clone).
 
 ## Running
@@ -21,6 +28,7 @@ Remote web UI for [Hermes Agent](https://github.com/NousResearch/hermes-agent). 
 - `bunx vite build` builds the frontend.
 - `bun run dev` starts the Vite dev server on :5173, which proxies `/ui-api` to the relay.
 - `bunx vue-tsc --noEmit` typechecks the frontend.
+- `bun test` runs the tests in `test/`; `bunx tsc -p test --noEmit` typechecks them. They cover the pure modules below through their own interfaces, with fakes in place of the relay.
 - `bun fmt` formats everything (config in `bunfig.toml`: tabs, single quotes, no semicolons, width 120). Run it after editing; `bun fmt --check` must pass. Don't add a `fmt` script to package.json, because `bun fmt` would run it instead of the formatter.
 - The connection is configured in `.env` (`HERMES_GATEWAY_URL`, `HERMES_API_KEY`, `HERMES_DASHBOARD_URL`, `HERMES_DASHBOARD_USERNAME`/`PASSWORD` or `HERMES_DASHBOARD_TOKEN`).
 - Screenshots and demos use `scripts/mock-relay.ts`, a relay with made-up data on its own port, never the live instance; its header explains running it and capturing 2x screenshots.
