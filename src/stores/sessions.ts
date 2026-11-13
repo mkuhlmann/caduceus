@@ -130,6 +130,39 @@ function upToTurn(ms: Message[], at: number) {
 	return cut
 }
 
+// Tries at picking up a dropped reply stream while the app is shown, a little further apart each time.
+const REJOIN_TRIES = 8
+
+/** The connection dropped (not a refusal): picking the stream up again may work. */
+function dropped(e: unknown) {
+	const err = e as Error & { status?: number }
+	return err.name === 'StreamLost' || (err.name === 'TypeError' && err.status === undefined)
+}
+
+/** Wait before picking a dropped stream up again: until the app is shown, then a moment, or until back online. */
+function backAgain(tries: number, signal: AbortSignal) {
+	return new Promise<void>((resolve) => {
+		const delay = Math.min(10_000, 500 * 2 ** (tries - 1))
+		let timer: ReturnType<typeof setTimeout> | undefined
+		const done = () => {
+			clearTimeout(timer)
+			document.removeEventListener('visibilitychange', shown)
+			removeEventListener('online', done)
+			signal.removeEventListener('abort', done)
+			resolve()
+		}
+		// A phone asleep is not a try: the wait starts once the app is shown again.
+		const shown = () => {
+			clearTimeout(timer)
+			if (!document.hidden) timer = setTimeout(done, delay)
+		}
+		document.addEventListener('visibilitychange', shown)
+		addEventListener('online', done)
+		signal.addEventListener('abort', done)
+		shown()
+	})
+}
+
 function lastOf<T>(xs: T[], ok: (x: T) => unknown) {
 	for (let i = xs.length - 1; i >= 0; i--) if (ok(xs[i]!)) return xs[i]
 }
@@ -619,72 +652,94 @@ export const useSessions = defineStore('sessions', () => {
 			if (!ownWatch) savedTimer = setTimeout(watchSaved, SAVED_MS)
 		}
 
+		// The relay keeps the turn's stream. When the connection drops (the phone slept, the network changed), the turn
+		// picks it up again where it broke off once the device is back.
+		let streamKey = ''
+		let seen = -1
+		const streamOpts = {
+			signal: l.abort.signal,
+			onStream: (key: string) => (streamKey = key),
+			onFrame: (n: number) => (seen = n),
+		}
+		let events = gateway.chat(id, payload, streamOpts)
 		try {
-			for await (const ev of gateway.chat(id, payload, { signal: l.abort.signal })) {
-				if (!['run.started', 'run.finished', 'assistant.completed', 'status', 'error'].includes(ev.type)) {
-					if (!streamed && savedTimer !== undefined) {
-						// The stream carries the steps after all: start the turn over from it.
-						turn.steps = []
-						turn.reasoning = ''
-					}
-					streamed = true
-				}
-				switch (ev.type) {
-					case 'assistant.delta':
-						writer.text(ev.delta)
-						break
-					case 'reasoning':
-						// A finished block, not a stream: the reasoning was written before it arrived.
-						writer.reasoning(ev.delta, false)
-						break
-					case 'assistant.commentary':
-						writer.commentary(ev.text)
-						break
-					case 'tool.started':
-						writer.toolStarted({ name: ev.tool, preview: ev.preview, args: (ev.args as any) ?? null })
-						if (ev.tool === 'clarify') void watchClarify()
-						break
-					case 'tool.completed':
-						writer.toolDone({ name: ev.tool }, ev.failed)
-						break
-					case 'run.started':
-						writer.flush()
-						l.runId = ev.run_id
-						void watchClarify()
-						if (l.stopRequested) gateway.stopRun(ev.run_id, id).catch(() => l.abort.abort())
-						// Hermes names the chat from the message as the run starts.
-						setTimeout(() => refreshSession(id, true), 1500)
-						break
-					case 'approval.request': {
-						writer.flush()
-						l.approval = ev.request
-						const step: ApprovalStep = {
-							kind: 'approval',
-							command: ev.request.command,
-							description: ev.request.description as string | undefined,
-							choices: ev.request.choices ?? ['once', 'session', 'always', 'deny'],
+			for (let tries = 0; ;) {
+				try {
+					for await (const ev of events) {
+						tries = 0
+						if (!['run.started', 'run.finished', 'assistant.completed', 'status', 'error'].includes(ev.type)) {
+							if (!streamed && savedTimer !== undefined) {
+								// The stream carries the steps after all: start the turn over from it.
+								turn.steps = []
+								turn.reasoning = ''
+							}
+							streamed = true
 						}
-						turn.steps.push(step)
-						break
+						switch (ev.type) {
+							case 'assistant.delta':
+								writer.text(ev.delta)
+								break
+							case 'reasoning':
+								// A finished block, not a stream: the reasoning was written before it arrived.
+								writer.reasoning(ev.delta, false)
+								break
+							case 'assistant.commentary':
+								writer.commentary(ev.text)
+								break
+							case 'tool.started':
+								writer.toolStarted({ name: ev.tool, preview: ev.preview, args: (ev.args as any) ?? null })
+								if (ev.tool === 'clarify') void watchClarify()
+								break
+							case 'tool.completed':
+								writer.toolDone({ name: ev.tool }, ev.failed)
+								break
+							case 'run.started':
+								writer.flush()
+								l.runId = ev.run_id
+								void watchClarify()
+								if (l.stopRequested) gateway.stopRun(ev.run_id, id).catch(() => l.abort.abort())
+								// Hermes names the chat from the message as the run starts.
+								setTimeout(() => refreshSession(id, true), 1500)
+								break
+							case 'approval.request': {
+								writer.flush()
+								l.approval = ev.request
+								const step: ApprovalStep = {
+									kind: 'approval',
+									command: ev.request.command,
+									description: ev.request.description as string | undefined,
+									choices: ev.request.choices ?? ['once', 'session', 'always', 'deny'],
+								}
+								turn.steps.push(step)
+								break
+							}
+							case 'status':
+								l.status = ev.text
+								break
+							case 'run.finished':
+								writer.flush()
+								if (ev.status === 'failed') turn.error = ev.error || 'The run failed.'
+								if (ev.status === 'completed') usage = ev.usage
+								break
+							case 'error':
+								writer.flush()
+								turn.error = ev.message
+								break
+						}
 					}
-					case 'status':
-						l.status = ev.text
-						break
-					case 'run.finished':
-						writer.flush()
-						if (ev.status === 'failed') turn.error = ev.error || 'The run failed.'
-						if (ev.status === 'completed') usage = ev.usage
-						break
-					case 'error':
-						writer.flush()
-						turn.error = ev.message
-						break
+					break
+				} catch (e) {
+					if (!streamKey || !dropped(e) || ++tries > REJOIN_TRIES) throw e
+					await backAgain(tries, l.abort.signal)
+					events = gateway.rejoin(streamKey, seen, streamOpts)
 				}
 			}
 		} catch (e) {
-			if ((e as Error).name === 'StreamLost') lost = true
-			else if ((e as Error).name !== 'AbortError') {
-				const err = e as Error & { status?: number; code?: string }
+			const err = e as Error & { status?: number; code?: string }
+			// Gone for good (no longer kept, or the device stayed away): the run goes on and is followed below.
+			if (err.name === 'StreamLost' || (streamKey && err.name !== 'AbortError' && (err.status === 404 || dropped(e))))
+				lost = true
+			else if (err.name !== 'AbortError') {
 				turn.error =
 					err.status === 409 && err.code === 'permission_denied'
 						? 'This conversation belongs to another channel and cannot be continued from here. Start a copy to keep going.'

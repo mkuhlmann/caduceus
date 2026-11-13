@@ -242,11 +242,14 @@ export const gateway = {
 	resumeJob: (id: string) => post(`${GW}/api/jobs/${enc(id)}/resume`),
 	runJob: (id: string) => post(`${GW}/api/jobs/${enc(id)}/run`),
 
-	/** Stream one turn of a session. Yields normalized events; abort via signal. */
+	/**
+	 * Stream one turn of a session. Yields normalized events; abort via signal. The relay keeps the stream:
+	 * `onStream` gets its key and `onFrame` each event's number, which is what `rejoin` picks up from.
+	 */
 	async *chat(
 		sessionId: string,
 		message: string | Array<Record<string, unknown>>,
-		opts: { signal?: AbortSignal; model?: string; instructions?: string } = {},
+		opts: ChatStreamOpts & { model?: string; instructions?: string } = {},
 	): AsyncGenerator<ChatEvent> {
 		const res = await fetch(url(`${at(sessionId)}/api/sessions/${enc(sessionId)}/chat/stream`), {
 			method: 'POST',
@@ -259,59 +262,79 @@ export const gateway = {
 			signal: opts.signal,
 		})
 		if (!res.ok) throw await toError(res)
-		for await (const frame of streamLost(readSse(res, opts.signal), opts.signal)) {
-			let d: any
-			try {
-				d = JSON.parse(frame.data)
-			} catch {
-				continue
-			}
-			const name = frame.event ?? d.event ?? d.type
-			switch (name) {
-				case 'run.started':
-					yield { type: 'run.started', run_id: d.run_id, session_id: d.session_id }
-					break
-				case 'assistant.delta':
-					if (d.delta) yield { type: 'assistant.delta', delta: d.delta }
-					break
-				case 'assistant.commentary':
-					if (!d.already_streamed && d.text) yield { type: 'assistant.commentary', text: d.text }
-					break
-				case 'tool.progress':
-					if (d.delta) yield { type: 'reasoning', delta: d.delta }
-					break
-				case 'tool.started':
-					yield { type: 'tool.started', tool: d.tool_name, preview: d.preview, args: d.args }
-					break
-				case 'tool.completed':
-				case 'tool.failed':
-					yield { type: 'tool.completed', tool: d.tool_name, preview: d.preview, failed: name === 'tool.failed' }
-					break
-				case 'approval.request':
-					yield { type: 'approval.request', request: { ...d, run_id: d.run_id } }
-					break
-				case 'assistant.completed':
-					yield { type: 'assistant.completed', content: d.content ?? '' }
-					break
-				case 'run.completed':
-				case 'run.failed':
-				case 'run.cancelled':
-					yield {
-						type: 'run.finished',
-						status: name.slice(4) as 'completed' | 'failed' | 'cancelled',
-						usage: d.usage,
-						error: d.error?.message ?? d.error,
-					}
-					break
-				case 'hermes.status':
-					if (d.text) yield { type: 'status', text: d.text }
-					break
-				case 'error':
-					yield { type: 'error', message: d.message ?? 'The run failed.' }
-					break
-			}
-		}
+		const key = res.headers.get('X-Caduceus-Stream')
+		if (key) opts.onStream?.(key)
+		yield* chatEvents(res, opts)
 	},
+
+	/** Pick a turn's stream up again after the connection dropped: the events after `after`, then the rest live. */
+	async *rejoin(key: string, after: number, opts: ChatStreamOpts = {}): AsyncGenerator<ChatEvent> {
+		const res = await fetch(url(`ui-api/runs/streams/${enc(key)}${qs({ after })}`), {
+			headers: { Accept: 'text/event-stream' },
+			signal: opts.signal,
+		})
+		if (!res.ok) throw await toError(res)
+		yield* chatEvents(res, opts)
+	},
+}
+
+type ChatStreamOpts = { signal?: AbortSignal; onStream?: (key: string) => void; onFrame?: (n: number) => void }
+
+/** A chat stream's events, normalized. */
+async function* chatEvents(res: Response, opts: ChatStreamOpts): AsyncGenerator<ChatEvent> {
+	for await (const frame of streamLost(readSse(res, opts.signal), opts.signal)) {
+		if (frame.id !== undefined && /^\d+$/.test(frame.id)) opts.onFrame?.(Number(frame.id))
+		let d: any
+		try {
+			d = JSON.parse(frame.data)
+		} catch {
+			continue
+		}
+		const name = frame.event ?? d.event ?? d.type
+		switch (name) {
+			case 'run.started':
+				yield { type: 'run.started', run_id: d.run_id, session_id: d.session_id }
+				break
+			case 'assistant.delta':
+				if (d.delta) yield { type: 'assistant.delta', delta: d.delta }
+				break
+			case 'assistant.commentary':
+				if (!d.already_streamed && d.text) yield { type: 'assistant.commentary', text: d.text }
+				break
+			case 'tool.progress':
+				if (d.delta) yield { type: 'reasoning', delta: d.delta }
+				break
+			case 'tool.started':
+				yield { type: 'tool.started', tool: d.tool_name, preview: d.preview, args: d.args }
+				break
+			case 'tool.completed':
+			case 'tool.failed':
+				yield { type: 'tool.completed', tool: d.tool_name, preview: d.preview, failed: name === 'tool.failed' }
+				break
+			case 'approval.request':
+				yield { type: 'approval.request', request: { ...d, run_id: d.run_id } }
+				break
+			case 'assistant.completed':
+				yield { type: 'assistant.completed', content: d.content ?? '' }
+				break
+			case 'run.completed':
+			case 'run.failed':
+			case 'run.cancelled':
+				yield {
+					type: 'run.finished',
+					status: name.slice(4) as 'completed' | 'failed' | 'cancelled',
+					usage: d.usage,
+					error: d.error?.message ?? d.error,
+				}
+				break
+			case 'hermes.status':
+				if (d.text) yield { type: 'status', text: d.text }
+				break
+			case 'error':
+				yield { type: 'error', message: d.message ?? 'The run failed.' }
+				break
+		}
+	}
 }
 
 /**
