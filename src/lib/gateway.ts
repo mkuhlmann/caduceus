@@ -53,6 +53,9 @@ export type Job = {
 	schedule_display?: string
 	deliver?: string
 	skills?: string[]
+	/** A script-only job runs this script on the Hermes host instead of the agent. */
+	script?: string | null
+	no_agent?: boolean
 	repeat?: { times?: number | null; completed?: number } | number | null
 	enabled?: boolean
 	state?: string

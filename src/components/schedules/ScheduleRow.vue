@@ -41,6 +41,20 @@ const repeatText = computed(() => {
 function toggle() {
 	open.value = !open.value
 }
+
+// A script-only job runs without the agent, so its runs are output files on the Hermes host, not chats.
+// Hermes lists them with `source: 'cron_output'` and serves only the first 180 characters of each.
+const isOutputRun = (r: any) => r.source === 'cron_output'
+const openRun = ref<string | null>(null)
+function outputRun(r: any) {
+	// The title carries the run's outcome in front ("COMPLETED · …"); the preview, the file's own text.
+	const m = /^([A-Z][A-Z ]*) · /.exec(r.title ?? '')
+	const status = m ? m[1]!.charAt(0) + m[1]!.slice(1).toLowerCase() : ''
+	// The file opens with a header naming the job, run time and mode; the script's output follows `---`.
+	let text = String(r.preview ?? '')
+	if (text.startsWith('# Cron Job:')) text = text.slice(text.indexOf('---') + 3).trim()
+	return { status, text }
+}
 </script>
 
 <template>
@@ -132,7 +146,10 @@ function toggle() {
 		<Transition enter-active-class="rise-enter-active" enter-from-class="rise-enter-from">
 			<div v-if="open" class="mb-3 ml-8 mr-2 max-w-[72ch] space-y-3">
 				<p v-if="paused && job.paused_reason" class="text-sm text-ink-2">Paused: {{ job.paused_reason }}</p>
-				<p class="whitespace-pre-wrap break-words text-sm">{{ job.prompt }}</p>
+				<p v-if="job.no_agent && job.script" class="text-sm">
+					Runs the script <span class="font-mono">{{ job.script }}</span> on the Hermes host, without the agent.
+				</p>
+				<p v-if="job.prompt" class="whitespace-pre-wrap break-words text-sm">{{ job.prompt }}</p>
 				<p class="text-sm text-ink-3">
 					Sends to {{ job.deliver || 'local'
 					}}<template v-if="job.skills?.length"> with skills {{ job.skills.join(', ') }}</template
@@ -155,7 +172,41 @@ function toggle() {
 					<p v-else-if="!runs?.length" class="text-sm text-ink-3">No runs yet.</p>
 					<ul v-else class="divide-y divide-line rounded-md border border-line">
 						<li v-for="r in runs" :key="r.id">
+							<template v-if="isOutputRun(r)">
+								<button
+									class="pressable flex w-full items-center justify-between gap-3 px-3 py-1.5 text-left text-sm hover:bg-surface-2"
+									:aria-expanded="openRun === r.id"
+									@click="openRun = openRun === r.id ? null : r.id"
+								>
+									<span class="flex min-w-0 items-center gap-2">
+										<ChevronRight
+											:size="16"
+											class="shrink-0 text-ink-3 transition-transform"
+											:class="openRun === r.id && 'rotate-90'"
+										/>
+										<span class="truncate">{{ dateTime(r.started_at) }}</span>
+									</span>
+									<span
+										class="shrink-0"
+										:class="/fail|error/i.test(outputRun(r).status) ? 'text-rose' : 'text-ink-3'"
+										>{{ outputRun(r).status || 'Script output' }}</span
+									>
+								</button>
+								<div v-if="openRun === r.id" class="space-y-1 px-3 pb-2 pl-9">
+									<p
+										v-if="outputRun(r).text"
+										class="whitespace-pre-wrap break-words font-mono text-xs text-ink-2"
+										v-text="outputRun(r).text"
+									/>
+									<p class="text-xs text-ink-3">
+										{{ outputRun(r).text ? 'Only the start of the output is shown.' : 'This run left no output.' }}
+										The script ran without the agent, so there is no chat to open. Hermes keeps the full output on its
+										host under <span class="font-mono">cron/output/{{ job.id }}/</span>.
+									</p>
+								</div>
+							</template>
 							<router-link
+								v-else
 								:to="`/chat/${encodeURIComponent(r.id)}`"
 								class="pressable flex items-center justify-between gap-3 px-3 py-1.5 text-sm hover:bg-surface-2"
 							>
