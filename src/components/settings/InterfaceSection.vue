@@ -15,6 +15,15 @@ async function setVoiceSubmit(v: Preferences['voiceSubmit']) {
 		toasts.error(`Could not save the voice setting. ${(e as Error).message}`)
 	}
 }
+
+/** A switch shows its new state at once; only a refusal from the server is worth a toast. */
+async function toggle(key: 'tintMessages' | 'runStats', v: boolean, what: string) {
+	try {
+		await preferences.set(key, v)
+	} catch (e) {
+		toasts.error(`Could not save ${what}. ${(e as Error).message}`)
+	}
+}
 </script>
 
 <template>
@@ -38,20 +47,29 @@ async function setVoiceSubmit(v: Preferences['voiceSubmit']) {
 		</p>
 
 		<div class="mt-6 flex items-center gap-3">
-			<ToggleSwitch v-model="app.tintMessages" label="Colour my messages in bot chats" />
+			<ToggleSwitch
+				:model-value="preferences.prefs.tintMessages"
+				label="Colour my messages in bot chats"
+				@update:model-value="toggle('tintMessages', $event, 'the message colour setting')"
+			/>
 			<span class="text-sm font-medium">Colour my messages in bot chats</span>
 		</div>
 		<p class="mt-1 text-sm text-ink-2">
-			In a bot's chat, your messages and the send button take that bot's colour. Saved in this browser only.
+			In a bot's chat, your messages and the send button take that bot's colour. Saved on the Caduceus server, so it
+			applies on all your devices.
 		</p>
 
 		<div class="mt-6 flex items-center gap-3">
-			<ToggleSwitch v-model="app.runStats" label="Show speed under replies" />
+			<ToggleSwitch
+				:model-value="preferences.prefs.runStats"
+				label="Show speed under replies"
+				@update:model-value="toggle('runStats', $event, 'the speed setting')"
+			/>
 			<span class="text-sm font-medium">Show speed under replies</span>
 		</div>
 		<p class="mt-1 text-sm text-ink-2">
 			After a reply, show how fast the model read the prompt (pp/s) and wrote its answer (tg/s), and how long the whole
-			turn took. Saved in this browser only.
+			turn took. Saved on the Caduceus server, so it applies on all your devices.
 		</p>
 
 		<label class="label mt-6" for="ui-start">Start page</label>

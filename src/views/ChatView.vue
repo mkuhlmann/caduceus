@@ -6,6 +6,7 @@ import { useSessions, sourceLabel } from '@/stores/sessions'
 import { useBots } from '@/stores/bots'
 import { useProjects, PROJECT_COLORS } from '@/stores/projects'
 import { useApp } from '@/stores/app'
+import { usePreferences } from '@/stores/preferences'
 import { useToasts } from '@/stores/toast'
 import { useDialogs } from '@/stores/dialogs'
 import { dashboard } from '@/lib/dashboard'
@@ -31,6 +32,7 @@ const router = useRouter()
 const sessions = useSessions()
 const projects = useProjects()
 const app = useApp()
+const preferences = usePreferences()
 const toasts = useToasts()
 const dialogs = useDialogs()
 const bots = useBots()
@@ -99,7 +101,8 @@ function retryRefresh() {
 const foreign = computed(
 	() => !botName.value && session.value?.source && !['api_server'].includes(session.value.source),
 )
-const statsOf = (turnKey: string) => (app.runStats && id.value ? sessions.statsFor(id.value, turnKey) : undefined)
+const statsOf = (turnKey: string) =>
+	preferences.prefs.runStats && id.value ? sessions.statsFor(id.value, turnKey) : undefined
 // The face beside a reply is alive only on the newest one; earlier replies show it still.
 const lastAgentKey = computed(() => [...shownTurns.value].reverse().find((t) => t.kind === 'agent')?.key)
 
@@ -342,7 +345,9 @@ function userView(text: string) {
 }
 const botColor = computed(() => (bot.value ? COLORS[resolveLook(bot.value.name, bot.value.look).color]! : undefined))
 // In a bot's chat your own messages and the send button can take the bot's colour (Settings > Interface).
-const messageTint = computed(() => (botColor.value && app.tintMessages ? messageFill(botColor.value) : undefined))
+const messageTint = computed(() =>
+	botColor.value && preferences.prefs.tintMessages ? messageFill(botColor.value) : undefined,
+)
 // The dots after "Working" in a bot's chat take its colour, unless its body is too pale to show on the page.
 const liveTint = computed(() => (botColor.value && eyesAreDark(botColor.value) ? 'var(--ink-3)' : botColor.value))
 const shownModel = computed(() => (bot.value ? bot.value.model : model.value))

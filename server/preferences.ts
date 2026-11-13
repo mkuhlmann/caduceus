@@ -9,12 +9,20 @@ import { join, dirname } from 'node:path'
 export type Preferences = {
 	/** What happens with a voice recording's text: put in the message box to check first, or sent right away. */
 	voiceSubmit: 'fill' | 'send'
+	/** In a bot's chat, your own messages and the send button take the bot's colour. */
+	tintMessages: boolean
+	/** A line under each reply with the model's speed and how long the turn took. */
+	runStats: boolean
 }
 
-const defaults: Preferences = { voiceSubmit: 'fill' }
+const defaults: Preferences = { voiceSubmit: 'fill', tintMessages: true, runStats: false }
+
+const bool = (v: unknown): v is boolean => typeof v === 'boolean'
 
 const valid: { [K in keyof Preferences]: (v: unknown) => v is Preferences[K] } = {
 	voiceSubmit: (v): v is Preferences['voiceSubmit'] => v === 'fill' || v === 'send',
+	tintMessages: bool,
+	runStats: bool,
 }
 
 const file = join(process.env.CADUCEUS_DATA_DIR ?? join(process.cwd(), '.data'), 'preferences.json')

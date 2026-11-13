@@ -20,6 +20,7 @@ import { post } from '@/lib/http'
 import { TurnWriter } from '@/lib/turn-writer'
 import { counters, RunClock, savedStats, saveStats, turnStats, turnTokens, type RunStats } from '@/lib/run-stats'
 import { useApp } from './app'
+import { usePreferences } from './preferences'
 
 type Live = {
 	runId?: string
@@ -454,7 +455,7 @@ export const useSessions = defineStore('sessions', () => {
 		const turn = reactive<AgentTurn>({ kind: 'agent', key: 'live-agent', steps: [], reasoning: '', live: true })
 		const l: Live = reactive({ turn, user: { text, images }, abort: new AbortController() }) as Live
 		live[id] = l
-		const clock = useApp().runStats ? new RunClock() : null
+		const clock = usePreferences().prefs.runStats ? new RunClock() : null
 		const before = clock ? gateway.session(id).then(counters, () => null) : null
 		let usage: { input_tokens?: number; output_tokens?: number } | undefined
 		const writer = new TurnWriter(turn, clock)
