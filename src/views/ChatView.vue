@@ -131,7 +131,7 @@ watch(
 		// A chat already in memory shows at once, at its end; a fresh copy loads behind it.
 		stickToBottom = true
 		scrollDown(true)
-		nextTick(() => composer.value?.focus())
+		nextTick(() => composer.value?.autoFocus())
 		if (v && !sessions.live[v]) await sessions.loadMessages(v, { open: true })
 		if (v !== id.value) return
 		sessions.follow(v)

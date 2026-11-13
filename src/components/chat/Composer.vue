@@ -82,6 +82,13 @@ function choose(o: Option) {
 	})
 }
 
+/** On a touch screen focusing the box opens the keyboard over the chat, so there only a tap on it does that. */
+const touchScreen = () => matchMedia('(pointer: coarse)').matches
+/** Focus that nobody asked for, like on opening a chat or after a recording: skipped on touch screens. */
+function autoFocus() {
+	if (!touchScreen()) area.value?.focus()
+}
+
 const MAX_BYTES = 6 * 1024 * 1024
 
 function grow() {
@@ -214,7 +221,7 @@ async function startRecording() {
 
 function discard() {
 	discardRecording()
-	nextTick(() => area.value?.focus())
+	nextTick(autoFocus)
 }
 
 watch(elapsed, (s) => {
@@ -264,6 +271,7 @@ function insert(said: string) {
 	text.value = joinWords(before, said, after)
 	const pos = text.value.length - after.length
 	caret = pos
+	if (touchScreen()) return
 	nextTick(() => {
 		area.value?.focus()
 		area.value?.setSelectionRange(pos, pos)
@@ -292,7 +300,7 @@ function seed(prefix: string) {
 	})
 }
 
-defineExpose({ focus: () => area.value?.focus(), seed })
+defineExpose({ focus: () => area.value?.focus(), autoFocus, seed })
 </script>
 
 <template>
@@ -347,7 +355,7 @@ defineExpose({ focus: () => area.value?.focus(), seed })
 			rows="1"
 			class="block max-h-80 w-full resize-none bg-transparent px-4 pt-3.5 pb-1 text-base text-ink placeholder:text-ink-3 focus:outline-none focus-visible:outline-none"
 			:placeholder="placeholder ?? 'Message Hermes'"
-			:autofocus="autofocus"
+			:autofocus="autofocus && !touchScreen()"
 			aria-label="Message"
 			:aria-autocomplete="mentions?.length ? 'list' : undefined"
 			:aria-controls="options.length ? 'mention-options' : undefined"
