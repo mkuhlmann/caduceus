@@ -9,6 +9,7 @@ import { useResource } from '@/lib/resource'
 import { relative } from '@/lib/time'
 import type { Bot } from '@/stores/bots'
 import { useToasts } from '@/stores/toast'
+import { useDialogs } from '@/stores/dialogs'
 
 /**
  * A bot's routines: recurring tasks attached to the bot that does them, as in Hermes Desktop. They are plain Hermes
@@ -17,6 +18,7 @@ import { useToasts } from '@/stores/toast'
 const props = defineProps<{ bot: Bot }>()
 const emit = defineEmits<{ close: [] }>()
 const toasts = useToasts()
+const dialogs = useDialogs()
 
 const TAG = /^\[bot:([a-z0-9][a-z0-9_-]*)\]\s*/i
 const { data, error, pending, reload, mutate } = useResource(`bot-routines:${props.bot.name}`, () =>
@@ -144,7 +146,13 @@ async function runNow(j: Job) {
 }
 
 async function remove(j: Job) {
-	if (!confirm(`Delete the routine ${title(j)}?`)) return
+	const ok = await dialogs.confirm({
+		title: `Delete ${title(j)}?`,
+		body: 'The routine stops running for this bot and cannot be restored.',
+		action: 'Delete routine',
+		danger: true,
+	})
+	if (!ok) return
 	try {
 		await dashboard.deleteBotJob(props.bot.name, j.id)
 		mutate((list) => list?.filter((x) => x.id !== j.id))

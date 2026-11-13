@@ -5,12 +5,14 @@ import type { Session } from '@/lib/gateway'
 import { useSessions } from '@/stores/sessions'
 import { useProjects } from '@/stores/projects'
 import { useToasts } from '@/stores/toast'
+import { useDialogs } from '@/stores/dialogs'
 
 const props = defineProps<{ session: Session }>()
 const emit = defineEmits<{ close: [] }>()
 const sessions = useSessions()
 const projects = useProjects()
 const toasts = useToasts()
+const dialogs = useDialogs()
 const router = useRouter()
 const el = ref<HTMLElement>()
 const mode = ref<'menu' | 'project'>('menu')
@@ -41,14 +43,27 @@ async function run(fn: () => Promise<unknown>, done?: string) {
 	emit('close')
 }
 
-function rename() {
-	const t = prompt('Rename chat', props.session.title ?? '')
-	if (t && t.trim()) run(() => sessions.rename(props.session.id, t.trim()), 'Chat renamed')
-	else emit('close')
+// Both close the menu before asking, so the dialog does not open over a menu it would then dismiss.
+async function rename() {
+	emit('close')
+	const t = await dialogs.prompt({
+		title: 'Rename chat',
+		label: 'Title',
+		value: props.session.title ?? '',
+		action: 'Rename chat',
+	})
+	if (t) run(() => sessions.rename(props.session.id, t), 'Chat renamed')
 }
 
-function remove() {
-	if (!confirm('Delete this chat and its history from Hermes? This cannot be undone.')) return emit('close')
+async function remove() {
+	emit('close')
+	const ok = await dialogs.confirm({
+		title: 'Delete this chat?',
+		body: 'The chat and its history are removed from Hermes and cannot be recovered.',
+		action: 'Delete chat',
+		danger: true,
+	})
+	if (!ok) return
 	run(async () => {
 		await sessions.remove(props.session.id)
 		if (router.currentRoute.value.params.id === props.session.id) router.push('/chat')

@@ -7,6 +7,7 @@ import { useBots } from '@/stores/bots'
 import { useProjects, PROJECT_COLORS } from '@/stores/projects'
 import { useApp } from '@/stores/app'
 import { useToasts } from '@/stores/toast'
+import { useDialogs } from '@/stores/dialogs'
 import { dashboard } from '@/lib/dashboard'
 import { setSessionProfile } from '@/lib/gateway'
 import { dateTime } from '@/lib/time'
@@ -30,6 +31,7 @@ const sessions = useSessions()
 const projects = useProjects()
 const app = useApp()
 const toasts = useToasts()
+const dialogs = useDialogs()
 const bots = useBots()
 
 // On /bots/:name this is a bot's chat: its one `Bot Chat`, with the bot roster beside it.
@@ -283,8 +285,12 @@ async function send(text: string, images: string[]) {
 
 async function continueInCopy() {
 	if (!id.value) return
-	if (!confirm('Copy this conversation into a new chat you can continue here? Hermes marks the original as branched.'))
-		return
+	const ok = await dialogs.confirm({
+		title: 'Continue in a copy?',
+		body: 'This conversation is copied into a new chat you can continue here. Hermes marks the original as branched.',
+		action: 'Continue in a copy',
+	})
+	if (!ok) return
 	try {
 		const s = await sessions.fork(id.value)
 		router.push(`/chat/${encodeURIComponent(s.id)}`)

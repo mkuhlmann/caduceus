@@ -12,12 +12,14 @@ import { invalidateResource, useResource } from '@/lib/resource'
 import { useApp } from '@/stores/app'
 import { useSessions, sourceLabel } from '@/stores/sessions'
 import { useToasts } from '@/stores/toast'
+import { useDialogs } from '@/stores/dialogs'
 
 const PAGE = 50
 const router = useRouter()
 const app = useApp()
 const sessions = useSessions()
 const toasts = useToasts()
+const dialogs = useDialogs()
 
 type Page = { items: HistoryItem[]; total: number | null; hasMore: boolean }
 type Stats = { total: number; messages: number; by_source: Record<string, number> }
@@ -247,7 +249,13 @@ async function toggleArchive(it: HistoryItem) {
 
 async function remove(it: HistoryItem) {
 	const name = it.title || it.preview?.trim() || 'Untitled'
-	if (!confirm(`Delete "${name}"? The whole conversation is removed from Hermes and cannot be recovered.`)) return
+	const ok = await dialogs.confirm({
+		title: `Delete “${name}”?`,
+		body: 'The whole conversation is removed from Hermes and cannot be recovered.',
+		action: 'Delete chat',
+		danger: true,
+	})
+	if (!ok) return
 	busyId.value = it.id
 	animateNext()
 	invalidateResource('history:dash:')

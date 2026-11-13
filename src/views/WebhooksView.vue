@@ -5,6 +5,7 @@ import { dashboard, type Webhook } from '@/lib/dashboard'
 import { useResource } from '@/lib/resource'
 import { useApp } from '@/stores/app'
 import { useToasts } from '@/stores/toast'
+import { useDialogs } from '@/stores/dialogs'
 import PageHeader from '@/components/PageHeader.vue'
 import EmptyState from '@/components/EmptyState.vue'
 import Skeleton from '@/components/Skeleton.vue'
@@ -12,6 +13,7 @@ import WebhookForm from '@/components/webhooks/WebhookForm.vue'
 
 const app = useApp()
 const toasts = useToasts()
+const dialogs = useDialogs()
 // Cached per session: a revisit paints the last list at once and refreshes it in the background.
 const { data, error, pending, refreshing, reload, mutate } = useResource(
 	() => (app.dashboard?.ok ? 'webhooks' : null),
@@ -75,7 +77,13 @@ async function setEnabled(w: Webhook, on: boolean) {
 }
 
 async function remove(w: Webhook) {
-	if (!confirm(`Delete the webhook "${w.name}"? Services posting to its URL will get an error.`)) return
+	const ok = await dialogs.confirm({
+		title: `Delete ${w.name}?`,
+		body: 'Services posting to its URL will get an error.',
+		action: 'Delete webhook',
+		danger: true,
+	})
+	if (!ok) return
 	busyName.value = w.name
 	animateNext()
 	patchList((l) => l.filter((x) => x.name !== w.name))

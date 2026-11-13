@@ -8,6 +8,7 @@ import { relative, dateTime } from '@/lib/time'
 import { useSessions, sourceLabel } from '@/stores/sessions'
 import { useProjects, PROJECT_COLORS, type Project } from '@/stores/projects'
 import { useToasts } from '@/stores/toast'
+import { useDialogs } from '@/stores/dialogs'
 import ProjectFormModal from './ProjectFormModal.vue'
 import AddChatsModal from './AddChatsModal.vue'
 
@@ -17,6 +18,7 @@ const router = useRouter()
 const sessions = useSessions()
 const projects = useProjects()
 const toasts = useToasts()
+const dialogs = useDialogs()
 
 // Rows only animate in or out right after the user adds or removes chats, never on the first paint.
 const animate = ref(false)
@@ -64,8 +66,13 @@ async function removeChat(id: string) {
 }
 
 async function removeProject() {
-	if (!confirm(`Delete the project "${props.project.name}"? Its chats stay in Hermes; only the grouping is removed.`))
-		return
+	const ok = await dialogs.confirm({
+		title: `Delete ${props.project.name}?`,
+		body: 'Its chats stay in Hermes; only the grouping is removed.',
+		action: 'Delete project',
+		danger: true,
+	})
+	if (!ok) return
 	// The store drops the project at once, so go back to the list right away.
 	const removing = projects.remove(props.project.id)
 	emit('deleted')

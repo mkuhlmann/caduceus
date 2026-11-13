@@ -14,12 +14,14 @@ import { useGroups } from '@/stores/groups'
 import { useApp } from '@/stores/app'
 import { useBots, type Bot, type BotSection } from '@/stores/bots'
 import { useToasts } from '@/stores/toast'
+import { useDialogs } from '@/stores/dialogs'
 
 const app = useApp()
 const bots = useBots()
 const groupStore = useGroups()
 const creatingGroup = ref(false)
 const toasts = useToasts()
+const dialogs = useDialogs()
 const route = useRoute()
 const router = useRouter()
 const creating = ref(false)
@@ -88,14 +90,14 @@ const groups = computed(() => {
 	return query.value.trim() ? out.filter((g) => g.bots.length) : out
 })
 
-function newSection() {
-	const name = prompt('Name the new section')?.trim()
+async function newSection() {
+	const name = await dialogs.prompt({ title: 'New section', label: 'Name', action: 'Create section' })
 	if (name) bots.createSection(name)
 }
 
 async function renameSection(s: BotSection) {
 	sectionMenu.value = null
-	const name = prompt('Rename section', s.name)?.trim()
+	const name = await dialogs.prompt({ title: 'Rename section', label: 'Name', value: s.name, action: 'Rename section' })
 	if (!name || name === s.name) return
 	try {
 		await bots.renameSection(s.id, name)

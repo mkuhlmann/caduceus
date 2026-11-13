@@ -3,12 +3,14 @@ import { onBeforeUnmount, onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { useBots, type Bot } from '@/stores/bots'
 import { useToasts } from '@/stores/toast'
+import { useDialogs } from '@/stores/dialogs'
 
 /** Everything you can do to one bot: the same actions as Hermes Desktop's right-click menu. */
 const props = defineProps<{ bot: Bot }>()
 const emit = defineEmits<{ close: []; settings: [] }>()
 const bots = useBots()
 const toasts = useToasts()
+const dialogs = useDialogs()
 const router = useRouter()
 const el = ref<HTMLElement>()
 const mode = ref<'menu' | 'section'>('menu')
@@ -51,32 +53,40 @@ async function openRecent() {
 	}
 }
 
-function newSection() {
-	const name = prompt('Name the new section')?.trim()
-	if (!name) return emit('close')
+// Each of these closes the menu before asking, so the dialog does not open over a menu it would then dismiss.
+async function newSection() {
+	emit('close')
+	const name = await dialogs.prompt({ title: 'New section', label: 'Name', action: 'Create section' })
+	if (!name) return
 	const s = bots.createSection(name)
 	run(() => bots.moveToSection(props.bot.name, s), `Moved to ${s.name}`)
 }
 
-function duplicate() {
-	const name = prompt(
-		`Handle for the copy of ${props.bot.displayName} (lowercase letters, digits, - and _)`,
-		`${props.bot.name === 'default' ? 'hermes' : props.bot.name}-copy`,
-	)?.trim()
-	if (!name) return emit('close')
+async function duplicate() {
+	emit('close')
+	const name = await dialogs.prompt({
+		title: `Duplicate ${props.bot.displayName}`,
+		label: 'Handle for the copy',
+		value: `${props.bot.name === 'default' ? 'hermes' : props.bot.name}-copy`,
+		hint: 'Lowercase letters, digits, - and _.',
+		action: 'Duplicate bot',
+	})
+	if (!name) return
 	run(async () => {
 		const created = await bots.duplicate(props.bot.name, name.toLowerCase())
 		router.push(`/bots/${encodeURIComponent(created)}`)
 	}, 'Bot duplicated')
 }
 
-function remove() {
-	if (
-		!confirm(
-			`Delete ${props.bot.displayName}? Its profile on the Hermes host goes too: memory, skills, chats and settings.`,
-		)
-	)
-		return emit('close')
+async function remove() {
+	emit('close')
+	const ok = await dialogs.confirm({
+		title: `Delete ${props.bot.displayName}?`,
+		body: 'Its profile on the Hermes host goes too: memory, skills, chats and settings.',
+		action: 'Delete bot',
+		danger: true,
+	})
+	if (!ok) return
 	run(async () => {
 		await bots.remove(props.bot.name)
 		if (router.currentRoute.value.params.name === props.bot.name) router.push('/bots')

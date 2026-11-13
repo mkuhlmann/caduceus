@@ -6,9 +6,11 @@ import ToggleSwitch from './ToggleSwitch.vue'
 import { dashboard } from '@/lib/dashboard'
 import { useResource } from '@/lib/resource'
 import { useToasts } from '@/stores/toast'
+import { useDialogs } from '@/stores/dialogs'
 
 type Env = Awaited<ReturnType<typeof dashboard.env>>
 const toasts = useToasts()
+const dialogs = useDialogs()
 const res = useResource<Env>('settings:env', () => dashboard.env())
 const env = computed(() => res.data.value ?? {})
 const loading = computed(() => res.pending.value)
@@ -74,7 +76,13 @@ async function save() {
 	}
 }
 async function remove(key: string) {
-	if (!confirm(`Remove ${key}? Hermes will stop using it.`)) return
+	const ok = await dialogs.confirm({
+		title: `Remove ${key}?`,
+		body: 'Hermes will stop using it.',
+		action: 'Remove key',
+		danger: true,
+	})
+	if (!ok) return
 	const prev = env.value[key]
 	markSet(key, false)
 	try {

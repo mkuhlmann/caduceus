@@ -4,6 +4,7 @@ import { useRouter, type RouteLocationNormalized } from 'vue-router'
 import { useApp } from '@/stores/app'
 import AppRail from '@/components/AppRail.vue'
 import Toasts from '@/components/Toasts.vue'
+import Dialogs from '@/components/Dialogs.vue'
 import LoginView from '@/views/LoginView.vue'
 
 const app = useApp()
@@ -45,5 +46,6 @@ onMounted(async () => {
 			</RouterView>
 		</main>
 	</div>
+	<Dialogs />
 	<Toasts />
 </template>

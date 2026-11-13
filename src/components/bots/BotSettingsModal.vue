@@ -9,11 +9,13 @@ import { dashboard } from '@/lib/dashboard'
 import { resolveLook, type BotLook } from '@/lib/avatar'
 import { prettyName, useBots, type Bot } from '@/stores/bots'
 import { useToasts } from '@/stores/toast'
+import { useDialogs } from '@/stores/dialogs'
 
 const props = defineProps<{ bot: Bot }>()
 const emit = defineEmits<{ close: [] }>()
 const bots = useBots()
 const toasts = useToasts()
+const dialogs = useDialogs()
 const router = useRouter()
 
 const look = ref<BotLook>(resolveLook(props.bot.name, props.bot.look))
@@ -76,12 +78,13 @@ async function save() {
 }
 
 async function remove() {
-	if (
-		!confirm(
-			`Delete ${props.bot.displayName}? Its profile on the Hermes host goes too: memory, skills, chats and settings.`,
-		)
-	)
-		return
+	const ok = await dialogs.confirm({
+		title: `Delete ${props.bot.displayName}?`,
+		body: 'Its profile on the Hermes host goes too: memory, skills, chats and settings.',
+		action: 'Delete bot',
+		danger: true,
+	})
+	if (!ok) return
 	busy.value = true
 	try {
 		await bots.remove(props.bot.name)

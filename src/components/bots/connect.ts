@@ -1,6 +1,7 @@
 import { ApiError } from '@/lib/http'
 import { useBots, type Bot } from '@/stores/bots'
 import { useToasts } from '@/stores/toast'
+import { useDialogs } from '@/stores/dialogs'
 
 /**
  * Let Caduceus talk to a bot made elsewhere (the Hermes desktop app, the terminal). A bot with a gateway key keeps it
@@ -15,9 +16,12 @@ export async function connectBot(bot: Bot) {
 			await bots.connect(bot.name)
 		} catch (e) {
 			if (!(e instanceof ApiError && e.code === 'key_exists')) throw e
-			const ok = confirm(
-				`${bot.displayName} already has a gateway key, but Hermes would not show it to Caduceus. Replace it with a new one? Apps using the old key, such as Hermes Desktop or another Caduceus, need to reconnect it afterwards.`,
-			)
+			const ok = await useDialogs().confirm({
+				title: `Replace the gateway key of ${bot.displayName}?`,
+				body: `${bot.displayName} already has a gateway key, but Hermes would not show it to Caduceus. Apps using the old key, such as Hermes Desktop or another Caduceus, need to reconnect it afterwards.`,
+				action: 'Replace key',
+				danger: true,
+			})
 			if (!ok) return false
 			await bots.connect(bot.name, true)
 		}
@@ -35,9 +39,12 @@ export async function connectBot(bot: Bot) {
  * fails.
  */
 export async function reconnectBot(bot: Bot) {
-	const ok = confirm(
-		`${bot.displayName} no longer accepts the key Caduceus keeps for it, and Hermes would not show Caduceus its current one. Give it a new key? Apps using the current key, such as Hermes Desktop or another Caduceus, then need to reconnect it.`,
-	)
+	const ok = await useDialogs().confirm({
+		title: `Give ${bot.displayName} a new key?`,
+		body: `${bot.displayName} no longer accepts the key Caduceus keeps for it, and Hermes would not show Caduceus its current one. Apps using the current key, such as Hermes Desktop or another Caduceus, then need to reconnect it.`,
+		action: 'Give new key',
+		danger: true,
+	})
 	if (!ok) return false
 	await useBots().connect(bot.name, true)
 	useToasts().push('Bot reconnected')

@@ -5,8 +5,10 @@ import { DASH, post } from '@/lib/http'
 import { dashboard } from '@/lib/dashboard'
 import { useResource } from '@/lib/resource'
 import { useToasts } from '@/stores/toast'
+import { useDialogs } from '@/stores/dialogs'
 
 const toasts = useToasts()
+const dialogs = useDialogs()
 const busy = ref(false)
 const res = useResource('settings:model', async () => {
 	const [options, info] = await Promise.all([dashboard.modelOptions(), dashboard.modelInfo()])
@@ -64,7 +66,12 @@ async function apply() {
 	try {
 		let r = await send()
 		if (!r.ok && r.confirm_required) {
-			if (!confirm(r.confirm_message || 'This model may be expensive. Use it anyway?')) return
+			const ok = await dialogs.confirm({
+				title: 'Use this model?',
+				body: r.confirm_message || 'This model may be expensive.',
+				action: 'Use model',
+			})
+			if (!ok) return
 			r = await send(true)
 		}
 		toasts.push('Model changed')

@@ -42,6 +42,7 @@ Tokens are in `src/style.css`; use them via Tailwind.
   - `panel` is for grouped content that genuinely needs a container.
 - **Components:** `Modal.vue` (props `title`, `wide`; slots default and `footer`; emits `close`), `PageHeader.vue`, `EmptyState.vue` (`title`, `body`, slot for actions).
   - Toasts: `useToasts().push(text)` and `.error(text)`.
+  - Confirm and prompt: `await useDialogs().confirm({ title, body, action, danger })` resolves to a boolean; `await useDialogs().prompt({ title, label, value, hint, action })` resolves to the trimmed text or `null`. Never use the browser's `confirm()` or `prompt()`. From a popover menu, close the menu before asking.
   - Icons: `lucide-vue-next`, size 16–18.
   - Time helpers: `src/lib/time.ts` (`relative`, `dateTime`, `toDate`).
   - Markdown: `renderMarkdown` from `src/lib/markdown.ts`, rendered into an element with class `prose-h`.
@@ -52,6 +53,6 @@ Tokens are in `src/style.css`; use them via Tailwind.
   - Responsive down to 375px wide.
   - Keyboard reachable, with visible focus (already global).
   - Inputs have labels.
-  - Destructive actions ask for confirmation (`confirm()` is acceptable).
+  - Destructive actions ask for confirmation with `useDialogs().confirm` and `danger: true`.
   - Loading and error states are visible.
   - No motion beyond what a user action triggers.

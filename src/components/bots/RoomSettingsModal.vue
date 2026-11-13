@@ -8,6 +8,7 @@ import { get, post, qs } from '@/lib/http'
 import { useBots } from '@/stores/bots'
 import { useGroups, type Room, type RoomContext } from '@/stores/groups'
 import { useToasts } from '@/stores/toast'
+import { useDialogs } from '@/stores/dialogs'
 
 /** A group chat's settings: name, purpose and notes, who answers, members' history, and ending the room. */
 const props = defineProps<{ room: Room; context?: RoomContext; routingModes?: string[] }>()
@@ -15,6 +16,7 @@ const emit = defineEmits<{ close: [] }>()
 const groups = useGroups()
 const bots = useBots()
 const toasts = useToasts()
+const dialogs = useDialogs()
 const router = useRouter()
 
 const name = ref(props.room.name)
@@ -82,7 +84,13 @@ async function compress(profile: string) {
 }
 
 async function disband() {
-	if (!confirm(`Disband ${props.room.name}? The group chat ends for every client and cannot be opened again.`)) return
+	const ok = await dialogs.confirm({
+		title: `Disband ${props.room.name}?`,
+		body: 'The group chat ends for every client and cannot be opened again.',
+		action: 'Disband group chat',
+		danger: true,
+	})
+	if (!ok) return
 	busy.value = true
 	try {
 		await groups.disband(props.room.room_id)

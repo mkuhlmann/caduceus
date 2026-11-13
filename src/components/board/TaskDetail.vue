@@ -8,12 +8,14 @@ import { renderMarkdown } from '@/lib/markdown'
 import { useResource } from '@/lib/resource'
 import { dateTime, relative } from '@/lib/time'
 import { useToasts } from '@/stores/toast'
+import { useDialogs } from '@/stores/dialogs'
 import { label, targets } from './columns'
 
 /** `initial` is the card the user tapped, so the title shows at once while the full task loads. */
 const props = defineProps<{ id: string; board?: string; assignees: string[]; initial?: KanbanTask }>()
 const emit = defineEmits<{ close: []; changed: []; move: [id: string, to: string] }>()
 const toasts = useToasts()
+const dialogs = useDialogs()
 
 const res = useResource(
 	() => `kanban:task:${props.board ?? ''}:${props.id}`,
@@ -96,7 +98,13 @@ async function addComment() {
 }
 
 async function remove() {
-	if (!confirm(`Delete "${task.value?.title}"? This cannot be undone.`)) return
+	const ok = await dialogs.confirm({
+		title: `Delete “${task.value?.title}”?`,
+		body: 'The task is removed from the board and cannot be restored.',
+		action: 'Delete task',
+		danger: true,
+	})
+	if (!ok) return
 	try {
 		await dashboard.deleteTask(props.id, props.board)
 		toasts.push('Task deleted')

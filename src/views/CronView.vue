@@ -4,6 +4,7 @@ import { Plus, Search } from 'lucide-vue-next'
 import { gateway, type Job } from '@/lib/gateway'
 import { useResource } from '@/lib/resource'
 import { useToasts } from '@/stores/toast'
+import { useDialogs } from '@/stores/dialogs'
 import PageHeader from '@/components/PageHeader.vue'
 import EmptyState from '@/components/EmptyState.vue'
 import Skeleton from '@/components/Skeleton.vue'
@@ -11,6 +12,7 @@ import ScheduleRow from '@/components/schedules/ScheduleRow.vue'
 import ScheduleForm from '@/components/schedules/ScheduleForm.vue'
 
 const toasts = useToasts()
+const dialogs = useDialogs()
 // Cached per session: a revisit paints the last list at once and refreshes it in the background.
 const { data: jobs, error, pending, refreshing, reload, mutate } = useResource('schedules', () => gateway.jobs())
 const query = ref('')
@@ -92,9 +94,14 @@ const toggle = (j: Job) =>
 				j.next_run_at ? { state: 'scheduled', enabled: true, paused: false } : undefined,
 			)
 		: act(j, () => gateway.pauseJob(j.id), 'Schedule paused', { state: 'paused', enabled: false, paused: true })
-function remove(j: Job) {
-	if (confirm(`Delete the schedule "${j.name}"? This cannot be undone.`))
-		act(j, () => gateway.deleteJob(j.id), 'Schedule deleted', null)
+async function remove(j: Job) {
+	const ok = await dialogs.confirm({
+		title: `Delete ${j.name}?`,
+		body: 'The schedule stops and cannot be restored.',
+		action: 'Delete schedule',
+		danger: true,
+	})
+	if (ok) act(j, () => gateway.deleteJob(j.id), 'Schedule deleted', null)
 }
 async function saved() {
 	editing.value = null
