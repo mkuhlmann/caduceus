@@ -165,6 +165,13 @@ export const dashboard = {
 	setProfileModel: (name: string, provider: string, model: string) =>
 		put(`${DASH}/api/profiles/${encodeURIComponent(name)}/model`, { provider, model }),
 
+	// Cron jobs through the dashboard, which takes the fields the gateway's /api/jobs leaves out, such as a
+	// script-only job's `script` and `no_agent`. Without a profile Hermes uses its default one.
+	createCronJob: (body: Record<string, unknown>, profile?: string) =>
+		post<Job>(`${DASH}/api/cron/jobs${qs({ profile })}`, body),
+	updateCronJob: (id: string, updates: Record<string, unknown>, profile?: string) =>
+		put<Job>(`${DASH}/api/cron/jobs/${encodeURIComponent(id)}${qs({ profile })}`, { updates }),
+
 	// A bot's routines: cron jobs in the bot's own profile, named `[bot:<name>] <routine>` as in Hermes Desktop.
 	botJobs: (profile: string) => get<Job[]>(`${DASH}/api/cron/jobs${qs({ profile })}`),
 	createBotJob: (profile: string, body: Record<string, unknown>) =>

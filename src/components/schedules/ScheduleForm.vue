@@ -31,6 +31,9 @@ function repeatTimes(j?: Job): number | null {
 }
 
 const initial = {
+	// `agent` runs the prompt through Hermes; `script` runs a script on the Hermes host without the agent.
+	kind: (props.job?.no_agent ? 'script' : 'agent') as 'agent' | 'script',
+	script: props.job?.no_agent ? (props.job.script ?? '') : '',
 	name: props.job?.name ?? '',
 	prompt: props.job?.prompt ?? '',
 	schedule: scheduleText(props.job),
@@ -40,6 +43,13 @@ const initial = {
 }
 const form = reactive({ ...initial })
 const isEdit = computed(() => !!props.job)
+const isScript = computed(() => form.kind === 'script')
+// Script-only jobs are written through the dashboard: the gateway's job API cannot set a script.
+const canScript = computed(() => !!app.dashboard?.ok)
+const kinds = [
+	{ value: 'agent', label: 'Hermes' },
+	{ value: 'script', label: 'Script' },
+] as const
 
 const chips = [
 	{ label: 'Every 30 minutes', value: 'every 30m' },
@@ -76,7 +86,11 @@ async function save() {
 	const schedule = form.schedule.trim()
 	if (!name) return toasts.error('Give the schedule a name.')
 	if (!schedule) return toasts.error('Add a schedule, for example "every 30m".')
-	if (!form.prompt.trim()) return toasts.error('Write what Hermes should do each time.')
+	const script = form.script.trim()
+	if (isScript.value && !canScript.value)
+		return toasts.error('Script schedules need the Hermes dashboard. Connect it in Settings and try again.')
+	if (isScript.value && !script) return toasts.error('Name the script to run, for example "backup.sh".')
+	if (!isScript.value && !form.prompt.trim()) return toasts.error('Write what Hermes should do each time.')
 	const repeatRaw = form.repeat.trim()
 	const repeat = repeatRaw ? Number(repeatRaw) : null
 	if (repeat !== null && (!Number.isInteger(repeat) || repeat < 1))
@@ -86,6 +100,11 @@ async function save() {
 	try {
 		if (props.job) {
 			const body: Record<string, unknown> = {}
+			const kindChanged = form.kind !== initial.kind
+			if (kindChanged) body.no_agent = isScript.value
+			if (isScript.value && (kindChanged || script !== initial.script)) body.script = script
+			// Back to Hermes: the script would otherwise run before every prompt and feed it its output.
+			if (kindChanged && !isScript.value) body.script = null
 			if (name !== initial.name) body.name = name
 			if (schedule !== initial.schedule) body.schedule = schedule
 			if (form.prompt !== initial.prompt) body.prompt = form.prompt
@@ -96,17 +115,31 @@ async function save() {
 				body.repeat = { times: repeat, completed: done }
 			}
 			if (!Object.keys(body).length) return emit('close')
-			await gateway.updateJob(props.job.id, body)
+			if ('script' in body || 'no_agent' in body) {
+				const profile = typeof props.job.profile === 'string' ? props.job.profile : undefined
+				await dashboard.updateCronJob(props.job.id, body, profile)
+			} else await gateway.updateJob(props.job.id, body)
 			toasts.push('Schedule saved')
 		} else {
-			await gateway.createJob({
-				name,
-				schedule: schedule as any,
-				prompt: form.prompt,
-				deliver: form.deliver.trim() || 'local',
-				...(skillList(form.skills).length ? { skills: skillList(form.skills) } : {}),
-				...(repeat !== null ? { repeat: repeat as any } : {}),
-			})
+			const deliver = form.deliver.trim() || 'local'
+			if (isScript.value)
+				await dashboard.createCronJob({
+					name,
+					schedule,
+					script,
+					no_agent: true,
+					deliver,
+					...(repeat !== null ? { repeat } : {}),
+				})
+			else
+				await gateway.createJob({
+					name,
+					schedule: schedule as any,
+					prompt: form.prompt,
+					deliver,
+					...(skillList(form.skills).length ? { skills: skillList(form.skills) } : {}),
+					...(repeat !== null ? { repeat: repeat as any } : {}),
+				})
 			toasts.push('Schedule created')
 		}
 		emit('saved')
@@ -126,6 +159,53 @@ async function save() {
 				<input id="s-name" v-model="form.name" class="field" maxlength="200" placeholder="Morning briefing" autofocus />
 			</div>
 			<div>
+				<p class="label" id="s-kind">What runs</p>
+				<div class="flex flex-wrap gap-1.5" role="radiogroup" aria-labelledby="s-kind">
+					<button
+						v-for="k in kinds"
+						:key="k.value"
+						type="button"
+						role="radio"
+						:aria-checked="form.kind === k.value"
+						class="chip hover:bg-surface-3"
+						:class="form.kind === k.value && 'bg-surface-3 text-ink'"
+						@click="form.kind = k.value"
+					>
+						{{ k.label }}
+					</button>
+				</div>
+				<p class="mt-1 text-xs text-ink-3">
+					{{
+						isScript
+							? 'Runs a script on the Hermes host without the agent. Its output is saved and sent as the result.'
+							: 'Hermes works through a prompt in a fresh session, with its tools and skills.'
+					}}
+				</p>
+			</div>
+			<div v-if="isScript">
+				<label class="label" for="s-script">Script</label>
+				<input
+					id="s-script"
+					v-model="form.script"
+					class="field font-mono"
+					placeholder="nightly-backup.sh"
+					autocomplete="off"
+					spellcheck="false"
+					aria-describedby="s-script-help"
+				/>
+				<p id="s-script-help" class="mt-1 text-xs text-ink-3">
+					<template v-if="canScript">
+						A file in the <code class="font-mono">scripts</code> folder of the Hermes profile, for example
+						<code class="font-mono">~/.hermes/scripts</code>. Put it there first: Hermes checks that it exists when you
+						save.
+					</template>
+					<span v-else class="text-rose"
+						>Script schedules are saved through the Hermes dashboard, which is not connected. Connect it in
+						Settings.</span
+					>
+				</p>
+			</div>
+			<div v-else>
 				<label class="label" for="s-prompt">What Hermes should do</label>
 				<textarea
 					id="s-prompt"
@@ -190,7 +270,7 @@ async function save() {
 					<p class="mt-1 text-xs text-ink-3">Stop after this many runs. Empty means no limit.</p>
 				</div>
 			</div>
-			<div>
+			<div v-if="!isScript">
 				<label class="label" for="s-skills">Skills</label>
 				<input id="s-skills" v-model="form.skills" class="field" placeholder="Optional, separated by commas" />
 			</div>
