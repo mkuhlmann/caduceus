@@ -14,6 +14,7 @@ import MentionText from '@/components/chat/MentionText.vue'
 import Skeleton from '@/components/Skeleton.vue'
 import { dateTime, relative } from '@/lib/time'
 import { useTitle } from '@/lib/title'
+import { poller } from '@/lib/poller'
 import { useBots } from '@/stores/bots'
 import { useGroups, type PendingAction, type RoomEvent, type RoomMember } from '@/stores/groups'
 import { useToasts } from '@/stores/toast'
@@ -226,21 +227,17 @@ const CHOICES: Record<string, string> = {
 }
 
 // ── Loading, live updates, scrolling ──────────────────────────────────────────────────────────────────────────────
-let poll: ReturnType<typeof setTimeout> | undefined
 // Like Hermes Desktop: a 2 s poll, or a 15 s backstop when the backend pushes groups.changed for this room.
 const POLL_MS = 2000
 const BACKSTOP_MS = 15_000
-function schedule() {
-	clearTimeout(poll)
-	const pushed = groups.open[roomId.value]?.state?.change_events === true
-	poll = setTimeout(
-		async () => {
-			if (!document.hidden && roomId.value) await groups.refresh(roomId.value).catch(() => {})
-			schedule()
-		},
-		pushed ? BACKSTOP_MS : POLL_MS,
-	)
-}
+const poll = poller(
+	async () => {
+		const id = roomId.value
+		if (id) await groups.refresh(id).catch(() => {})
+		return groups.open[id]?.state?.change_events === true ? BACKSTOP_MS : POLL_MS
+	},
+	{ every: POLL_MS },
+)
 
 watch(
 	roomId,
@@ -252,12 +249,11 @@ watch(
 		groups.listen()
 		await groups.openRoom(id)
 		scrollDown(true)
-		schedule()
 	},
 	{ immediate: true },
 )
 onBeforeUnmount(() => {
-	clearTimeout(poll)
+	poll.stop()
 	if (roomId.value) groups.close(roomId.value)
 })
 
@@ -281,11 +277,9 @@ watch(
 )
 onMounted(() => document.addEventListener('visibilitychange', onVisible))
 onBeforeUnmount(() => document.removeEventListener('visibilitychange', onVisible))
+// Shown again: what is on screen counts as read, and the poll reads what came meanwhile.
 function onVisible() {
-	if (!document.hidden && roomId.value) {
-		groups.markSeen(roomId.value)
-		void groups.refresh(roomId.value)
-	}
+	if (!document.hidden && roomId.value) groups.markSeen(roomId.value)
 }
 
 // ── Actions ───────────────────────────────────────────────────────────────────────────────────────────────────
@@ -296,7 +290,6 @@ async function send(text: string) {
 		replyThread.value = null
 		stick = true
 		scrollDown(true)
-		schedule()
 	} catch (e) {
 		toasts.error(`Could not send the message: ${(e as Error).message}`)
 		composer.value?.seed(text)
@@ -319,7 +312,6 @@ async function resume(e: RoomEvent) {
 	continuing.value = String(e.payload.discussion_event_id)
 	try {
 		await groups.resume(roomId.value, continuing.value)
-		schedule()
 	} catch (err) {
 		toasts.error(`Could not continue: ${(err as Error).message}`)
 	} finally {

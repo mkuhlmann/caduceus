@@ -2,6 +2,7 @@ import { defineStore } from 'pinia'
 import { computed, reactive, ref } from 'vue'
 import { onRpcEvent, rpc } from '@/lib/rpc'
 import { onResync } from '@/lib/live'
+import { poller } from '@/lib/poller'
 
 /**
  * Group chats: rooms where several bots and the user talk together. Hermes' gateway hosts and drives them (it
@@ -198,12 +199,10 @@ export const useGroups = defineStore('groups', () => {
 				else void load()
 			}
 		})
-		const timer = setInterval(() => {
-			if (!document.hidden && loaded.value) void load()
-		}, 15_000)
+		const roster = poller(() => loaded.value && load(), { every: 15_000 })
 		unsubscribe = () => {
 			off()
-			clearInterval(timer)
+			roster.stop()
 		}
 	}
 

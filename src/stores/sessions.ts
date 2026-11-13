@@ -36,6 +36,7 @@ import { forgetTranscript, readTranscript, saveTranscript } from '@/lib/transcri
 import { fetchOlder, fetchTail, LIVE_TAIL, mergeTail, prependOlder, TAIL, type Tail } from '@/lib/transcript-pages'
 import { onRpcEvent } from '@/lib/rpc'
 import { onResync } from '@/lib/live'
+import { poller, type Poller } from '@/lib/poller'
 import { watchBotChat, type BotChatWatch, type WatchEvent } from '@/lib/bot-watch'
 import { post } from '@/lib/http'
 import { TurnWriter } from '@/lib/turn-writer'
@@ -724,7 +725,7 @@ export const useSessions = defineStore('sessions', () => {
 			if (failed) lastError.value = { ...lastError.value, [id]: failed }
 			else clearError(id)
 			// The run goes on without this tab's stream: follow it like one started elsewhere.
-			if (lost && followed === id) void poll(id, true)
+			if (lost && followed === id) follower?.now()
 			await settle(id)
 			if (timing && usage && !failed && !lost) {
 				const key = lastReplyKey(messages[id] ?? [])
@@ -943,60 +944,58 @@ export const useSessions = defineStore('sessions', () => {
 	 * channel such as the terminal (Hermes saves each step, so the transcript fills in as it goes).
 	 */
 	let followed: string | undefined
-	let followTimer: ReturnType<typeof setTimeout> | undefined
+	let follower: Poller | undefined
 
 	function follow(id?: string) {
-		clearTimeout(followTimer)
 		if (followed && followed !== id) {
 			delete remote[followed]
 			unwatchBot(followed)
 		}
+		follower?.stop()
+		follower = undefined
 		followed = id
 		if (id) {
-			followTimer = setTimeout(() => poll(id), 0)
+			// Back after being away, the open chat may have moved on.
+			follower = poller((asked) => poll(id, asked), { every: IDLE_MS, triggers: [onResync], start: true })
 			void watchBot(id)
 		}
 	}
 
-	/** `changed`: Hermes reported a write, so read the chat even when nothing seems to be running in it. */
-	async function poll(id: string, changed = false) {
-		let next = IDLE_MS
-		try {
-			// A turn watched on the Hermes socket brings its own steps; its transcript is read when it ends.
-			if (followed !== id || document.hidden || live[id] || botTurns[id]) return
-			await syncRuns()
-			const runId = activeRuns.value[id]
-			const stale = !runId && !unfinished(messages[id] ?? [])
-			if (stale && !remote[id] && !changed) return
-			const ok = () => followed === id && !live[id]
-			const [status, fresh] = await Promise.all([
-				runId ? gateway.run(runId, id).catch(() => null) : null,
-				refreshTail(id, { limit: LIVE_TAIL, ok }).then(
-					() => true,
-					() => false,
-				),
-			])
-			if (!ok() || !fresh) return
-			const ms = messages[id] ?? []
-			const lastAt = Number(lastOf(ms, (m) => m.timestamp)?.timestamp ?? 0)
-			const running = runId
-				? !['completed', 'failed', 'cancelled'].includes(status?.status ?? 'running')
-				: unfinished(ms) && Date.now() / 1000 - lastAt < STALE_S
-			if (running) {
-				remote[id] = { runId, approval: pendingApproval(status), clarify: pendingClarify(status) }
-				next = FOLLOW_MS
-			} else if (remote[id]) {
-				delete remote[id]
-				clearError(id)
-				await settle(id)
-			}
-		} finally {
-			// One loop per chat, however many reads (timer, event, tab focus) overlapped.
-			if (followed === id) {
-				clearTimeout(followTimer)
-				followTimer = setTimeout(() => poll(id), next)
-			}
+	/**
+	 * Read the open chat once; returns when to read it next. `changed`: asked for (Hermes reported a write, the app
+	 * came back), so read the chat even when nothing seems to be running in it.
+	 */
+	async function poll(id: string, changed: boolean): Promise<number> {
+		// A turn watched on the Hermes socket brings its own steps; its transcript is read when it ends.
+		if (followed !== id || live[id] || botTurns[id]) return IDLE_MS
+		await syncRuns()
+		const runId = activeRuns.value[id]
+		const stale = !runId && !unfinished(messages[id] ?? [])
+		if (stale && !remote[id] && !changed) return IDLE_MS
+		const ok = () => followed === id && !live[id]
+		const [status, fresh] = await Promise.all([
+			runId ? gateway.run(runId, id).catch(() => null) : null,
+			refreshTail(id, { limit: LIVE_TAIL, ok }).then(
+				() => true,
+				() => false,
+			),
+		])
+		if (!ok() || !fresh) return IDLE_MS
+		const ms = messages[id] ?? []
+		const lastAt = Number(lastOf(ms, (m) => m.timestamp)?.timestamp ?? 0)
+		const running = runId
+			? !['completed', 'failed', 'cancelled'].includes(status?.status ?? 'running')
+			: unfinished(ms) && Date.now() / 1000 - lastAt < STALE_S
+		if (running) {
+			remote[id] = { runId, approval: pendingApproval(status), clarify: pendingClarify(status) }
+			return FOLLOW_MS
 		}
+		if (remote[id]) {
+			delete remote[id]
+			clearError(id)
+			await settle(id)
+		}
+		return IDLE_MS
 	}
 
 	/**
@@ -1011,32 +1010,10 @@ export const useSessions = defineStore('sessions', () => {
 		for (const id of Object.keys(prev)) if (!next[id] && !live[id] && id !== followed) void settle(id)
 		for (const id of Object.keys(next)) if (!prev[id] && !byId(id)) void refreshSession(id)
 	}
+	poller(syncRuns, { every: RUNS_MS, triggers: [onResync], start: true })
 
-	let runsTimer: ReturnType<typeof setTimeout> | undefined
-	async function watchRuns() {
-		clearTimeout(runsTimer)
-		try {
-			if (!document.hidden) await syncRuns()
-		} finally {
-			runsTimer = setTimeout(watchRuns, RUNS_MS)
-		}
-	}
-	void watchRuns()
-
-	// Back after being away: chats changed elsewhere meanwhile, and the open one may have moved on.
-	onResync(() => {
-		void refreshList()
-		void watchRuns()
-		if (followed && !live[followed]) void poll(followed, true)
-	})
-
-	document.addEventListener('visibilitychange', () => {
-		if (!document.hidden) void watchRuns()
-		if (document.hidden || !followed || live[followed]) return
-		clearTimeout(followTimer)
-		const id = followed
-		void poll(id, true)
-	})
+	// Back after being away: chats changed elsewhere meanwhile.
+	onResync(() => void refreshList())
 
 	// A running chat writes all the time: the list follows its changes at most every 10 s.
 	let listTimer: ReturnType<typeof setTimeout> | undefined
@@ -1050,7 +1027,6 @@ export const useSessions = defineStore('sessions', () => {
 
 	// Hermes reports writes to its sessions (from any channel: terminal, Telegram, schedules) at most every 2s.
 	// The open chat reads its newest messages on each; the timers above stay as the fallback without events.
-	let changedTimer: ReturnType<typeof setTimeout> | undefined
 	let offChanged: (() => void) | undefined
 	watch(
 		() => !!useApp().dashboard?.ok,
@@ -1059,14 +1035,7 @@ export const useSessions = defineStore('sessions', () => {
 			offChanged = ok
 				? onRpcEvent('sessions.changed', () => {
 						listSoon()
-						const id = followed
-						if (!id || live[id] || document.hidden) return
-						clearTimeout(changedTimer)
-						changedTimer = setTimeout(() => {
-							if (followed !== id) return
-							clearTimeout(followTimer)
-							void poll(id, true)
-						}, 250)
+						if (followed && !live[followed]) follower?.soon(250)
 					})
 				: undefined
 		},
