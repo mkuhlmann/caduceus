@@ -88,7 +88,7 @@ const working = computed(() => {
 		<Transition enter-from-class="rise-enter-from" enter-active-class="rise-enter-active">
 			<p
 				v-if="showReasoning"
-				class="mb-3 max-w-[72ch] border-l-2 border-line pl-3 text-sm whitespace-pre-wrap text-ink-2"
+				class="mb-3 max-w-[72ch] border-l-2 border-line pl-3 text-sm whitespace-pre-wrap text-ink-2 [overflow-wrap:anywhere]"
 			>
 				{{ turn.reasoning }}
 			</p>

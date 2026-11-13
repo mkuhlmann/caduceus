@@ -420,7 +420,7 @@ const subtitle = computed(() => {
 									<CornerDownRight :size="12" /> In thread: {{ r.thread }}
 								</p>
 								<div class="max-w-[85%] rounded-2xl rounded-br-md bg-surface-2 px-4 py-2.5">
-									<p class="whitespace-pre-wrap">
+									<p class="whitespace-pre-wrap [overflow-wrap:anywhere]">
 										<MentionText :text="String(r.e.payload.text ?? '')" :bots="mentionTargets" />
 									</p>
 								</div>

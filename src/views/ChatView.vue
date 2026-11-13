@@ -570,7 +570,7 @@ async function connectThisBot() {
 										@{{ userView(t.text).notice!.handle
 										}}<template v-if="userView(t.text).notice!.notifyOnly">, no reply needed</template>
 									</p>
-									<p class="whitespace-pre-wrap">
+									<p class="whitespace-pre-wrap [overflow-wrap:anywhere]">
 										<MentionText :text="userView(t.text).text" :bots="bots.bots" />
 									</p>
 								</div>
@@ -594,7 +594,7 @@ async function connectThisBot() {
 											class="max-h-48 rounded-md"
 										/>
 									</div>
-									<p class="whitespace-pre-wrap">
+									<p class="whitespace-pre-wrap [overflow-wrap:anywhere]">
 										<MentionText :text="userView(t.text).text" :bots="bots.bots" :on-fill="!!messageTint" />
 									</p>
 								</div>
