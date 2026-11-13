@@ -9,8 +9,11 @@ import MarkdownBlocks from './MarkdownBlocks.vue'
 import RunStatsLine from './RunStatsLine.vue'
 import type { RunStats } from '@/lib/run-stats'
 
-/** `bot`: a bot's chat, where the bot's face beside the turn shows that it is live, so the route stays quiet. */
-const props = defineProps<{ turn: AgentTurn; status?: string; bot?: boolean; stats?: RunStats }>()
+/**
+ * `bot`: a bot's chat, where the bot's face beside the turn shows that it is live, so the route stays quiet.
+ * `tint` colours the dots after the working line there: the face's colour. Elsewhere they are gold.
+ */
+const props = defineProps<{ turn: AgentTurn; status?: string; bot?: boolean; tint?: string; stats?: RunStats }>()
 const emit = defineEmits<{ approve: [choice: string] }>()
 
 type Segment =
@@ -62,7 +65,13 @@ const RESOLVED_LABELS: Record<string, string> = {
 	elsewhere: 'Answered elsewhere',
 }
 
-const waiting = computed(() => props.turn.live && props.turn.steps.length === 0)
+// Under way and not writing: a line says what the agent is doing. Streaming reasoning has its own toggle.
+const working = computed(() => {
+	const { live, steps, reasoning } = props.turn
+	if (!live || segments.value.at(-1)?.kind === 'text') return false
+	if (steps.some((s) => s.kind === 'approval' && !s.resolved)) return false
+	return steps.length > 0 || !reasoning
+})
 </script>
 
 <template>
@@ -84,10 +93,6 @@ const waiting = computed(() => props.turn.live && props.turn.steps.length === 0)
 				{{ turn.reasoning }}
 			</p>
 		</Transition>
-
-		<p v-if="waiting && !turn.reasoning" class="py-1 text-sm text-ink-3" :class="{ 'route-thread pl-6': !bot }">
-			<span v-if="!bot" class="live-dot" />{{ status || 'Working' }}
-		</p>
 
 		<template v-for="(seg, idx) in segments" :key="seg.key">
 			<div v-if="seg.kind === 'tools'" class="route-thread my-1.5">
@@ -139,16 +144,12 @@ const waiting = computed(() => props.turn.live && props.turn.steps.length === 0)
 		</template>
 
 		<p
-			v-if="
-				turn.live &&
-				segments.length &&
-				segments.at(-1)?.kind !== 'text' &&
-				!turn.steps.some((s) => s.kind === 'approval' && !s.resolved)
-			"
-			class="py-1 text-sm text-ink-3"
+			v-if="working"
+			class="flex items-baseline py-1 text-sm text-ink-2"
 			:class="bot ? 'pl-1' : 'route-thread pl-6'"
+			:style="{ '--tint': tint }"
 		>
-			<span v-if="!bot" class="live-dot" />{{ status || 'Working' }}
+			{{ status || 'Working' }}<span class="trail" aria-hidden="true"><i /><i /><i /></span>
 		</p>
 
 		<p v-if="turn.error" class="mt-2 max-w-[72ch] rounded-md bg-rose-soft px-3 py-2 text-sm">{{ turn.error }}</p>
@@ -201,15 +202,45 @@ const waiting = computed(() => props.turn.live && props.turn.steps.length === 0)
 .live:not(.bot) .route-thread:last-of-type::before {
 	background: var(--gold);
 }
-.live-dot {
-	position: absolute;
-	left: -4px;
-	top: 0.65rem;
-	width: 10px;
-	height: 10px;
+/* Thought dots trail the working line, rising one after another like the ones over a thinking face. */
+.trail {
+	display: inline-flex;
+	align-self: center;
+	gap: 3px;
+	margin-left: 4px;
+	padding-top: 2px;
+}
+.trail i {
+	width: 3.5px;
+	height: 3.5px;
 	border-radius: 999px;
-	background: var(--gold);
-	animation: pulse 1.4s ease-in-out infinite;
+	background: var(--tint, var(--gold));
+	opacity: 0.25;
+	animation: trail 1.5s ease-in-out infinite;
+}
+.trail i:nth-child(2) {
+	animation-delay: 0.2s;
+}
+.trail i:nth-child(3) {
+	animation-delay: 0.4s;
+}
+@media (prefers-reduced-motion: reduce) {
+	.trail i {
+		animation: none;
+		opacity: 0.6;
+	}
+}
+@keyframes trail {
+	0%,
+	70%,
+	100% {
+		opacity: 0.25;
+		transform: none;
+	}
+	30% {
+		opacity: 1;
+		transform: translateY(-3px);
+	}
 }
 @keyframes pulse {
 	50% {

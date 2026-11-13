@@ -21,7 +21,7 @@ import BotSettingsModal from '@/components/bots/BotSettingsModal.vue'
 import RoutinesPanel from '@/components/bots/RoutinesPanel.vue'
 import MentionText from '@/components/chat/MentionText.vue'
 import { mentionNote, parseBotNotice, parseSystemNotice, resolveMentions, stripMentionNote } from '@/lib/mentions'
-import { COLORS, STATE_LABELS, messageFill, resolveLook } from '@/lib/avatar'
+import { COLORS, STATE_LABELS, eyesAreDark, messageFill, resolveLook } from '@/lib/avatar'
 import { connectBot, reconnectBot } from '@/components/bots/connect'
 import { ApiError } from '@/lib/http'
 
@@ -339,10 +339,11 @@ function userView(text: string) {
 	}
 	return { notice: null, from: undefined, text: stripMentionNote(text) }
 }
+const botColor = computed(() => (bot.value ? COLORS[resolveLook(bot.value.name, bot.value.look).color]! : undefined))
 // In a bot's chat your own messages and the send button can take the bot's colour (Settings > Interface).
-const messageTint = computed(() =>
-	bot.value && app.tintMessages ? messageFill(COLORS[resolveLook(bot.value.name, bot.value.look).color]!) : undefined,
-)
+const messageTint = computed(() => (botColor.value && app.tintMessages ? messageFill(botColor.value) : undefined))
+// The dots after "Working" in a bot's chat take its colour, unless its body is too pale to show on the page.
+const liveTint = computed(() => (botColor.value && eyesAreDark(botColor.value) ? 'var(--ink-3)' : botColor.value))
 const shownModel = computed(() => (bot.value ? bot.value.model : model.value))
 const connectingBot = ref(false)
 async function connectThisBot() {
@@ -607,6 +608,7 @@ async function connectThisBot() {
 									bot
 									:turn="t"
 									:status="t.live ? (liveStatus ?? botState.hint) : undefined"
+									:tint="liveTint"
 									:stats="statsOf(t.key)"
 									@approve="(c) => id && sessions.answerApproval(id, c)"
 								/>
