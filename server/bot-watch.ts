@@ -5,7 +5,7 @@ import { onSocketEvent, rpc, RpcError, viewerSupport, type SocketEvent } from '.
  * A bot's Bot Chat runs in the bot's own queue inside the gateway, and its chat stream reports nothing until the
  * reply is done. A socket the gateway serves (the Webapp's, with `session_authority`) can view that chat as Hermes
  * Desktop does: this attaches the relay's socket as a viewer of one chat and passes its turn to the browser, and
- * answers the approvals the turn asks for.
+ * answers the approvals and clarify questions the turn asks for.
  *
  * `GET /ui-api/bots/:name/watch?session=<id>` streams `ready` (what is running and pending at attach), then the
  * turn's events. A dashboard that cannot view a session answers 409 `no_viewer`, and the browser falls back to
@@ -25,6 +25,8 @@ const TURN = new Set([
 	'status.update',
 	'approval.request',
 	'approval.settled',
+	'clarify.request',
+	'clarify.settled',
 	'session.replay_gap',
 ])
 
@@ -165,6 +167,26 @@ export const botWatchRoutes = new Elysia({ prefix: '/ui-api/bots' })
 				execution_generation: b.generation,
 				prompt_id: b.prompt,
 				choice: b.choice,
+			})
+		} catch (e) {
+			const err = e as RpcError
+			set.status = err.code === 'socket_closed' || err.code === 'socket_failed' ? 502 : 409
+			return { error: { message: err.message, code: err.code } }
+		}
+	})
+	.post('/:name/clarify', async ({ params, body, set }) => {
+		const b = (body ?? {}) as { session?: string; generation?: number; prompt?: string; answer?: string }
+		if (!b.session || typeof b.generation !== 'number' || !b.prompt || typeof b.answer !== 'string') {
+			set.status = 400
+			return { error: { message: 'The answer is missing its chat, turn or question.', code: 'invalid_params' } }
+		}
+		try {
+			return await rpc('clarify.respond', {
+				...scope(params.name),
+				session_id: b.session,
+				execution_generation: b.generation,
+				prompt_id: b.prompt,
+				answer: b.answer,
 			})
 		} catch (e) {
 			const err = e as RpcError

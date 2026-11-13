@@ -4,12 +4,14 @@ import {
 	BOT_CHAT_TITLE,
 	gateway,
 	pendingApproval,
+	pendingClarify,
 	sessionProfile,
 	type ApprovalRequest,
+	type ClarifyPrompt,
 	type Message,
 	type Session,
 } from '@/lib/gateway'
-import { buildTurns, savedProgress, type AgentTurn, type ApprovalStep, type Turn } from '@/lib/turns'
+import { buildTurns, savedProgress, type AgentTurn, type ApprovalStep, type ClarifyStep, type Turn } from '@/lib/turns'
 import { useToasts } from './toast'
 import { useProjects } from './projects'
 import { forgetTranscript, readTranscript, saveTranscript } from '@/lib/transcript-cache'
@@ -35,13 +37,16 @@ type Live = {
 }
 
 /** A run of the open session that this tab did not start: another tab, device or channel. */
-type Remote = { runId?: string; approval?: ApprovalRequest }
+type Remote = { runId?: string; approval?: ApprovalRequest; clarify?: ClarifyPrompt[] }
 
 const FOLLOW_MS = 2000
 const IDLE_MS = 6000
 // A transcript that stopped mid-turn longer ago than this is an interrupted run, not a live one.
 const STALE_S = 10 * 60
 const RUNS_MS = 4000
+// How often a run is asked for its clarify questions while the agent's clarify tool runs. The chat stream does not
+// carry them; the run's status does.
+const CLARIFY_MS = 1000
 // How often a Bot Chat's saved steps are read while the bot works.
 const SAVED_MS = 1500
 // Hermes titles a chat instantly from the first message, then upgrades it with a model in the background,
@@ -99,6 +104,10 @@ function upTo(ms: Message[], at: number) {
 	const cut = ms.filter((m) => !(Number(m.id) > at))
 	cutCache.set(ms, { at, ms: cut })
 	return cut
+}
+
+function clarifyStep(q: ClarifyPrompt, via: ClarifyStep['via']): ClarifyStep {
+	return { kind: 'clarify', id: q.id, question: q.question, choices: q.choices, multiSelect: q.multiSelect, via }
 }
 
 function lastOf<T>(xs: T[], ok: (x: T) => unknown) {
@@ -424,6 +433,8 @@ export const useSessions = defineStore('sessions', () => {
 				const choices = a.choices ?? ['once', 'session', 'always', 'deny']
 				turn.steps.push({ kind: 'approval', command: a.command, description: a.description, choices })
 			}
+			if (r.runId)
+				for (const q of r.clarify ?? []) turn.steps.push(clarifyStep(q, { run: r.runId, generation: q.generation }))
 		}
 		return turns
 	}
@@ -460,6 +471,28 @@ export const useSessions = defineStore('sessions', () => {
 		let usage: { input_tokens?: number; output_tokens?: number } | undefined
 		const writer = new TurnWriter(turn, clock)
 
+		// The chat stream says the clarify tool started but not what it asks: the run's status holds the questions.
+		// It asks them one at a time, so the run is read until the tool is done.
+		let clarifyTimer: ReturnType<typeof setTimeout> | undefined
+		const watchClarify = async () => {
+			clearTimeout(clarifyTimer)
+			const runId = l.runId
+			const asking = () =>
+				live[id] === l && turn.steps.some((s) => s.kind === 'tool' && s.name === 'clarify' && s.status === 'running')
+			if (!runId || !asking()) return
+			const status = await gateway.run(runId, id).catch(() => null)
+			if (!asking()) return
+			if (status) {
+				const asked = pendingClarify(status)
+				for (const q of asked) writer.ask(clarifyStep(q, { run: runId, generation: q.generation }))
+				// Shown but no longer asked: answered somewhere else, or it ran out.
+				for (const s of turn.steps)
+					if (s.kind === 'clarify' && 'run' in s.via && s.answer === undefined && !asked.some((q) => q.id === s.id))
+						writer.clarifySettled(s.id)
+			}
+			clarifyTimer = setTimeout(watchClarify, CLARIFY_MS)
+		}
+
 		// A bot's Bot Chat runs in the bot's own queue, and its stream reports nothing until the reply is done.
 		// Where Hermes lets a socket view the chat, the turn streams from there (`onWatch` below). Otherwise it is
 		// filled in from the steps Hermes saves as it goes, until the stream says more.
@@ -489,7 +522,7 @@ export const useSessions = defineStore('sessions', () => {
 		const onWatch = (ev: WatchEvent) => {
 			if (live[id] !== l) return
 			streamed = true
-			const o = writer.apply(ev)
+			const o = writer.apply(ev, { profile, session: watchSession })
 			if (o.status) l.status = o.status
 			if (o.prompt) {
 				const { generation, id: promptId, command, description, choices } = o.prompt
@@ -545,6 +578,7 @@ export const useSessions = defineStore('sessions', () => {
 						break
 					case 'tool.started':
 						writer.toolStarted({ name: ev.tool, preview: ev.preview, args: (ev.args as any) ?? null })
+						if (ev.tool === 'clarify') void watchClarify()
 						break
 					case 'tool.completed':
 						writer.toolDone({ name: ev.tool }, ev.failed)
@@ -552,6 +586,7 @@ export const useSessions = defineStore('sessions', () => {
 					case 'run.started':
 						writer.flush()
 						l.runId = ev.run_id
+						void watchClarify()
 						if (l.stopRequested) gateway.stopRun(ev.run_id, id).catch(() => l.abort.abort())
 						// Hermes names the chat from the message as the run starts.
 						setTimeout(() => refreshSession(id, true), 1500)
@@ -593,6 +628,7 @@ export const useSessions = defineStore('sessions', () => {
 		} finally {
 			writer.flush()
 			clearTimeout(savedTimer)
+			clearTimeout(clarifyTimer)
 			ownWatch?.close()
 			const view = botViews[id]
 			if (view?.route?.handle === onWatch) {
@@ -669,7 +705,17 @@ export const useSessions = defineStore('sessions', () => {
 		if (followed !== id || botViews[id]) return w.close()
 		view = { watch: w, done: new Set() }
 		botViews[id] = view
-		if (w.running && !live[id]) startBotTurn(id, w.generation, true)
+		if (w.running && !live[id]) {
+			startBotTurn(id, w.generation, true)
+			// Asked before the watch began: they are still waiting for an answer.
+			for (const p of w.prompts)
+				if (p.kind === 'approval' || p.kind === 'clarify')
+					onBotEvent(id, view, {
+						type: `${p.kind}.request`,
+						payload: p,
+						generation: typeof p.execution_generation === 'number' ? p.execution_generation : w.generation,
+					})
+		}
 	}
 
 	function unwatchBot(id: string) {
@@ -693,7 +739,7 @@ export const useSessions = defineStore('sessions', () => {
 			if (bt) void finishBotTurn(id)
 			bt = startBotTurn(id, ev.generation, false)
 		}
-		const o = bt.writer.apply(ev)
+		const o = bt.writer.apply(ev, { profile: sessionProfile(id) ?? 'default', session: view.watch.session })
 		if (o.status) bt.status = o.status
 		if (o.prompt)
 			bt.prompt = {
@@ -725,8 +771,10 @@ export const useSessions = defineStore('sessions', () => {
 				}
 				bt.after = Number(lastOf(ms, (m) => m.role === 'user')?.id ?? NaN)
 				const p = Number.isFinite(bt.after) ? savedProgress(ms, bt.after!) : null
-				if (p && !turn.steps.length && !turn.reasoning) {
-					turn.steps = p.steps
+				// Questions still waiting from before the watch began come after the steps that led to them.
+				const waiting = turn.steps.filter((s) => s.kind === 'approval' || s.kind === 'clarify')
+				if (p && waiting.length === turn.steps.length && !turn.reasoning) {
+					turn.steps = [...p.steps, ...waiting]
 					turn.reasoning = p.reasoning
 				}
 			})
@@ -843,6 +891,30 @@ export const useSessions = defineStore('sessions', () => {
 		}
 	}
 
+	/** Answer a question the agent asked with its clarify tool. */
+	async function answerClarify(id: string, step: ClarifyStep, answer: string) {
+		const v = step.via
+		try {
+			if ('run' in v) await gateway.clarify(v.run, { id: step.id, generation: v.generation }, answer, id)
+			else
+				await post(`ui-api/bots/${encodeURIComponent(v.profile)}/clarify`, {
+					session: v.session,
+					generation: v.generation,
+					prompt: step.id,
+					answer,
+				})
+			step.answer = answer
+			const r = remote[id]
+			if (r?.clarify) r.clarify = r.clarify.filter((q) => q.id !== step.id)
+		} catch (e) {
+			const err = e as Error & { code?: string }
+			if (err.code === 'approval_not_pending' || err.code === 'stale_generation') {
+				step.answer = 'elsewhere'
+				toasts.error('That question was already answered or ran out.')
+			} else toasts.error(`Could not send the answer: ${err.message}`)
+		}
+	}
+
 	/**
 	 * Keep the open session current while it runs somewhere this tab is not streaming: another tab or
 	 * device (the relay knows its run id, so approvals, stop and steering work here too) or another
@@ -889,7 +961,7 @@ export const useSessions = defineStore('sessions', () => {
 				? !['completed', 'failed', 'cancelled'].includes(status?.status ?? 'running')
 				: unfinished(ms) && Date.now() / 1000 - lastAt < STALE_S
 			if (running) {
-				remote[id] = { runId, approval: pendingApproval(status) }
+				remote[id] = { runId, approval: pendingApproval(status), clarify: pendingClarify(status) }
 				next = FOLLOW_MS
 			} else if (remote[id]) {
 				delete remote[id]
@@ -1026,6 +1098,7 @@ export const useSessions = defineStore('sessions', () => {
 		send,
 		stop,
 		answerApproval,
+		answerClarify,
 		rename,
 		togglePin,
 		archive,

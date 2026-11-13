@@ -1,4 +1,4 @@
-import type { AgentTurn, ToolStep } from './turns'
+import type { AgentTurn, ClarifyStep, ToolStep } from './turns'
 import type { WatchEvent } from './bot-watch'
 import type { RunClock } from './run-stats'
 
@@ -97,8 +97,24 @@ export class TurnWriter {
 		if (!this.frame) this.frame = requestAnimationFrame(() => this.flush())
 	}
 
-	/** Apply one event a viewer of a Bot Chat gets on the Hermes socket. */
-	apply(ev: WatchEvent): Outcome {
+	/** Show a clarify question, once however often it is reported. */
+	ask(step: ClarifyStep) {
+		this.flush()
+		if (this.turn.steps.some((s) => s.kind === 'clarify' && s.id === step.id)) return
+		this.turn.steps.push(step)
+	}
+
+	/** A clarify question was answered somewhere else or ran out: it can no longer be answered here. */
+	clarifySettled(id: string) {
+		const step = this.turn.steps.find((s): s is ClarifyStep => s.kind === 'clarify' && s.id === id)
+		if (step && step.answer === undefined) step.answer = 'elsewhere'
+	}
+
+	/**
+	 * Apply one event a viewer of a Bot Chat gets on the Hermes socket. `where` names the chat on that socket, so a
+	 * clarify question can be answered there.
+	 */
+	apply(ev: WatchEvent, where?: { profile: string; session: string }): Outcome {
 		const p = ev.payload ?? {}
 		const text = typeof p.text === 'string' ? p.text : ''
 		switch (ev.type) {
@@ -148,6 +164,22 @@ export class TurnWriter {
 			}
 			case 'approval.settled':
 				return p.prompt_id ? { settled: p.prompt_id } : {}
+			case 'clarify.request': {
+				const generation = ev.generation ?? p.execution_generation
+				if (typeof generation !== 'number' || !p.prompt_id || !where) return {}
+				this.ask({
+					kind: 'clarify',
+					id: p.prompt_id,
+					question: p.question ?? '',
+					choices: Array.isArray(p.choices) ? p.choices : [],
+					multiSelect: !!p.multi_select,
+					via: { ...where, generation },
+				})
+				return {}
+			}
+			case 'clarify.settled':
+				if (p.prompt_id) this.clarifySettled(p.prompt_id)
+				return {}
 			case 'message.complete':
 				this.flush()
 				if (p.status === 'error' && typeof p.error === 'string' && p.error) this.turn.error = p.error

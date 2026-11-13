@@ -21,7 +21,20 @@ export type ApprovalStep = {
 	choices: string[]
 	resolved?: string
 }
-export type Step = ToolStep | TextStep | ApprovalStep
+/** A question the agent asks with its clarify tool, waiting for the user's answer. */
+export type ClarifyStep = {
+	kind: 'clarify'
+	/** Hermes' prompt id: the answer names it. */
+	id: string
+	question: string
+	choices: string[]
+	multiSelect?: boolean
+	/** Where the answer goes: the run the question belongs to, or the Hermes socket a Bot Chat is watched on. */
+	via: { run: string; generation: number } | { profile: string; session: string; generation: number }
+	/** The answer given here, or `elsewhere` when it was answered or ran out somewhere else. */
+	answer?: string
+}
+export type Step = ToolStep | TextStep | ApprovalStep | ClarifyStep
 
 export type UserTurn = { kind: 'user'; key: string; text: string; images: string[]; at?: number }
 export type AgentTurn = {

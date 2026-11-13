@@ -17,6 +17,7 @@ import SessionSidebar from '@/components/chat/SessionSidebar.vue'
 import ResizableSidebar from '@/components/ResizableSidebar.vue'
 import BotBento from '@/components/chat/BotBento.vue'
 import AgentTurnView from '@/components/chat/AgentTurnView.vue'
+import type { ClarifyStep } from '@/lib/turns'
 import Composer from '@/components/chat/Composer.vue'
 import BotSidebar from '@/components/bots/BotSidebar.vue'
 import BotAvatar from '@/components/bots/BotAvatar.vue'
@@ -353,6 +354,10 @@ const messageTint = computed(() =>
 const liveTint = computed(() => (botColor.value && eyesAreDark(botColor.value) ? 'var(--ink-3)' : botColor.value))
 const shownModel = computed(() => (bot.value ? bot.value.model : model.value))
 const connectingBot = ref(false)
+function answerClarify(step: ClarifyStep, answer: string) {
+	return id.value ? sessions.answerClarify(id.value, step, answer) : Promise.resolve()
+}
+
 async function connectThisBot() {
 	if (!bot.value) return
 	connectingBot.value = true
@@ -620,6 +625,7 @@ async function connectThisBot() {
 									:tint="liveTint"
 									:stats="statsOf(t.key)"
 									@approve="(c) => id && sessions.answerApproval(id, c)"
+									:answer="answerClarify"
 								/>
 							</div>
 							<AgentTurnView
@@ -628,6 +634,7 @@ async function connectThisBot() {
 								:status="t.live ? liveStatus : undefined"
 								:stats="statsOf(t.key)"
 								@approve="(c) => id && sessions.answerApproval(id, c)"
+								:answer="answerClarify"
 							/>
 						</template>
 					</div>

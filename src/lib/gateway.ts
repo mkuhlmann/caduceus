@@ -90,9 +90,37 @@ export type RunStatus = {
 		execution_generation?: number
 		command?: string
 		description?: string
+		question?: string
 		choices?: string[]
+		multi_select?: boolean
 	}>
 	[k: string]: unknown
+}
+
+/** A question the agent asks with its clarify tool. */
+export type ClarifyPrompt = {
+	id: string
+	generation: number
+	question: string
+	choices: string[]
+	multiSelect: boolean
+}
+
+/** The clarify questions a run is waiting on. Asking does not change the run's status. */
+export function pendingClarify(status: RunStatus | null | undefined): ClarifyPrompt[] {
+	return (status?.pending_controls ?? []).flatMap((c) =>
+		c.kind === 'clarify' && c.prompt_id && typeof c.execution_generation === 'number'
+			? [
+					{
+						id: c.prompt_id,
+						generation: c.execution_generation,
+						question: c.question ?? '',
+						choices: c.choices ?? [],
+						multiSelect: !!c.multi_select,
+					},
+				]
+			: [],
+	)
 }
 
 /** The approval a run is waiting on, in the shape `approve` takes. */
@@ -183,6 +211,14 @@ export const gateway = {
 			choice,
 			...(req.request_id ? { request_id: req.request_id } : {}),
 			...(req.execution_generation !== undefined ? { execution_generation: req.execution_generation } : {}),
+		}),
+
+	/** Answer a clarify question: a choice's label, a JSON array of labels for several, or the user's own text. */
+	clarify: (runId: string, prompt: { id: string; generation: number }, answer: string, sessionId?: string) =>
+		post(`${at(sessionId)}/v1/runs/${enc(runId)}/clarify`, {
+			request_id: prompt.id,
+			execution_generation: prompt.generation,
+			answer,
 		}),
 
 	/** A bot's one canonical conversation: Hermes identifies it by the exact title `Bot Chat`. */

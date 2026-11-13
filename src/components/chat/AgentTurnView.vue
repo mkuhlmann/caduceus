@@ -1,10 +1,11 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
 import { ChevronRight } from 'lucide-vue-next'
-import type { AgentTurn, ApprovalStep, Step, TextStep, ToolStep } from '@/lib/turns'
+import type { AgentTurn, ApprovalStep, ClarifyStep, Step, TextStep, ToolStep } from '@/lib/turns'
 import { prettyToolName } from '@/lib/turns'
 import { handleCodeCopy } from '@/lib/markdown'
 import ToolWaypoint from './ToolWaypoint.vue'
+import ClarifyCard from './ClarifyCard.vue'
 import MarkdownBlocks from './MarkdownBlocks.vue'
 import RunStatsLine from './RunStatsLine.vue'
 import type { RunStats } from '@/lib/run-stats'
@@ -13,13 +14,22 @@ import type { RunStats } from '@/lib/run-stats'
  * `bot`: a bot's chat, where the bot's face beside the turn shows that it is live, so the route stays quiet.
  * `tint` colours the dots after the working line there: the face's colour. Elsewhere they are gold.
  */
-const props = defineProps<{ turn: AgentTurn; status?: string; bot?: boolean; tint?: string; stats?: RunStats }>()
+const props = defineProps<{
+	turn: AgentTurn
+	status?: string
+	bot?: boolean
+	tint?: string
+	stats?: RunStats
+	/** Answers a clarify question; its promise settles once the answer is sent or has failed. */
+	answer?: (step: ClarifyStep, answer: string) => Promise<void>
+}>()
 const emit = defineEmits<{ approve: [choice: string] }>()
 
 type Segment =
 	| { kind: 'tools'; key: string; steps: ToolStep[] }
 	| { kind: 'text'; key: string; step: TextStep }
 	| { kind: 'approval'; key: string; step: ApprovalStep }
+	| { kind: 'clarify'; key: string; step: ClarifyStep }
 
 /** Consecutive tool calls become one stretch of the route. */
 const segments = computed<Segment[]>(() => {
@@ -30,6 +40,7 @@ const segments = computed<Segment[]>(() => {
 			if (prev?.kind === 'tools') prev.steps.push(s)
 			else out.push({ kind: 'tools', key: `t${i}`, steps: [s] })
 		} else if (s.kind === 'text') out.push({ kind: 'text', key: `x${i}`, step: s })
+		else if (s.kind === 'clarify') out.push({ kind: 'clarify', key: `q${s.id}`, step: s })
 		else out.push({ kind: 'approval', key: `a${i}`, step: s })
 	})
 	return out
@@ -69,7 +80,8 @@ const RESOLVED_LABELS: Record<string, string> = {
 const working = computed(() => {
 	const { live, steps, reasoning } = props.turn
 	if (!live || segments.value.at(-1)?.kind === 'text') return false
-	if (steps.some((s) => s.kind === 'approval' && !s.resolved)) return false
+	if (steps.some((s) => (s.kind === 'approval' && !s.resolved) || (s.kind === 'clarify' && s.answer === undefined)))
+		return false
 	return steps.length > 0 || !reasoning
 })
 </script>
@@ -119,6 +131,10 @@ const working = computed(() => {
 				:source="seg.step.text"
 				:streaming="turn.live && idx === segments.length - 1"
 			/>
+
+			<div v-else-if="seg.kind === 'clarify'" class="route-thread my-3">
+				<ClarifyCard :step="seg.step" :send="answer && ((a) => answer!(seg.step, a))" />
+			</div>
 
 			<div v-else class="route-thread my-3">
 				<div class="ml-6 max-w-[72ch] rounded-lg border border-gold/50 bg-gold-soft/40 p-3">

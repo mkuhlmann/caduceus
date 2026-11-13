@@ -10,6 +10,8 @@ export type BotWatch = {
 	/** A turn was already running when the watch began, and which one. */
 	running: boolean
 	generation: number | null
+	/** Approvals and clarify questions waiting for an answer when the watch began, as Hermes sends them. */
+	prompts: Array<Record<string, any>>
 	close(): void
 }
 
@@ -55,6 +57,7 @@ export async function watchBotChat(
 			session: ready.session,
 			running: !!ready.running,
 			generation: ready.generation ?? null,
+			prompts: Array.isArray(ready.prompts) ? ready.prompts : [],
 			close: () => abort.abort(),
 		}
 	} catch {
