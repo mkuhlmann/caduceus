@@ -46,7 +46,7 @@ const healthy = computed(() => app.gateway?.ok && (app.dashboard?.ok ?? true))
 
 <template>
 	<nav
-		class="flex shrink-0 items-center gap-0.5 border-t border-line bg-surface px-2 pt-1.5 pb-[max(0.375rem,env(safe-area-inset-bottom))] md:w-[76px] md:flex-col md:overflow-visible md:border-t-0 md:border-r md:px-0 md:py-3"
+		class="flex shrink-0 items-center gap-0.5 keyboard:max-md:hidden border-t border-line bg-surface px-2 pt-1.5 pb-[max(0.375rem,env(safe-area-inset-bottom))] md:w-[76px] md:flex-col md:overflow-visible md:border-t-0 md:border-r md:px-0 md:py-3"
 		aria-label="Main"
 	>
 		<RouterLink :to="`/${app.startPage}`" class="mb-3 hidden size-10 text-ink md:block" aria-label="Caduceus home">

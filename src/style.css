@@ -3,6 +3,8 @@
 @import '@fontsource-variable/jetbrains-mono';
 
 @custom-variant dark (&:where([data-theme='dark'], [data-theme='dark'] *));
+/* While a phone's keyboard is up (lib/viewport.ts). */
+@custom-variant keyboard (&:where([data-keyboard] *));
 
 /*
   Lapis & gold. Lapis lazuli and gold leaf: the oldest pairing in the
@@ -94,9 +96,13 @@
 }
 
 html,
-body,
-#app {
+body {
 	height: 100%;
+}
+
+/* The visible part of the screen, so a phone's keyboard shrinks the app instead of sliding it away (lib/viewport.ts). */
+#app {
+	height: var(--app-height, 100%);
 }
 
 body {
