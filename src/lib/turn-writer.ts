@@ -1,16 +1,11 @@
-import type { AgentTurn, ClarifyStep, ToolStep } from './turns'
+import { APPROVAL_CHOICES, type AgentTurn, type ApprovalStep, type ClarifyStep, type ToolStep } from './turns'
 import type { WatchEvent } from './bot-watch'
+import type { ChatEvent } from './gateway'
 import type { RunClock } from './run-stats'
-
-/** An approval a Bot Chat's turn asks for, answered on the Hermes socket. */
-export type SocketPrompt = { generation: number; id: string; command?: string; description?: string; choices: string[] }
 
 /** What an event means beyond the turn's own steps, for whoever shows the turn. */
 export type Outcome = {
 	status?: string
-	prompt?: SocketPrompt
-	/** The approval with this id was answered elsewhere or ran out. */
-	settled?: string
 	/** The view fell behind and Hermes dropped it. */
 	gap?: true
 	/** The turn ended. */
@@ -18,8 +13,10 @@ export type Outcome = {
 }
 
 /**
- * Writes a live agent turn as its events arrive. Tokens come faster than the screen refreshes, so text and
- * reasoning are collected and applied once per frame; anything else lands after the text before it.
+ * Writes a live agent turn as its events arrive, from either source: the chat stream of a turn sent from here
+ * (`applyChat`) or the Hermes socket a Bot Chat is watched on (`apply`). Tokens come faster than the screen
+ * refreshes, so text and reasoning are collected and applied once per frame; anything else lands after the text
+ * before it.
  */
 export class TurnWriter {
 	private written = ''
@@ -97,6 +94,21 @@ export class TurnWriter {
 		if (!this.frame) this.frame = requestAnimationFrame(() => this.flush())
 	}
 
+	/** Start the turn over: its steps so far were read from what Hermes saved, and the stream now brings them. */
+	restart() {
+		this.flush()
+		this.turn.steps = []
+		this.turn.reasoning = ''
+	}
+
+	/** Show an approval the turn waits for, once however often it is reported. */
+	approval(step: Omit<ApprovalStep, 'kind' | 'choices'> & { choices?: string[] }) {
+		this.flush()
+		const id = step.via && 'id' in step.via ? step.via.id : undefined
+		if (id && this.turn.steps.some((s) => s.kind === 'approval' && s.via && 'id' in s.via && s.via.id === id)) return
+		this.turn.steps.push({ ...step, kind: 'approval', choices: step.choices ?? APPROVAL_CHOICES })
+	}
+
 	/** Show a clarify question, once however often it is reported. */
 	ask(step: ClarifyStep) {
 		this.flush()
@@ -108,6 +120,50 @@ export class TurnWriter {
 	clarifySettled(id: string) {
 		const step = this.turn.steps.find((s): s is ClarifyStep => s.kind === 'clarify' && s.id === id)
 		if (step && step.answer === undefined) step.answer = 'elsewhere'
+	}
+
+	/** Apply one event of a turn's chat stream. */
+	applyChat(ev: ChatEvent): Outcome {
+		switch (ev.type) {
+			case 'assistant.delta':
+				this.text(ev.delta)
+				return {}
+			case 'reasoning':
+				// A finished block, not a stream: the reasoning was written before it arrived.
+				this.reasoning(ev.delta, false)
+				return {}
+			case 'assistant.commentary':
+				this.commentary(ev.text)
+				return {}
+			case 'tool.started':
+				this.toolStarted({ name: ev.tool, preview: ev.preview, args: (ev.args as ToolStep['args']) ?? null })
+				return {}
+			case 'tool.completed':
+				this.toolDone({ name: ev.tool }, ev.failed)
+				return {}
+			case 'approval.request':
+				this.approval({
+					command: ev.request.command,
+					description: ev.request.description,
+					choices: ev.request.choices,
+					via: { run: ev.request },
+				})
+				return {}
+			case 'status':
+				return { status: ev.text }
+			case 'run.finished':
+				this.flush()
+				if (ev.status === 'failed') this.turn.error = ev.error || 'The run failed.'
+				return { complete: true }
+			case 'error':
+				this.flush()
+				this.turn.error = ev.message
+				return {}
+			case 'run.started':
+				this.flush()
+				return {}
+		}
+		return {}
 	}
 
 	/**
@@ -155,15 +211,18 @@ export class TurnWriter {
 			case 'approval.request': {
 				this.flush()
 				const generation = ev.generation ?? p.execution_generation
-				if (typeof generation !== 'number' || !p.prompt_id) return {}
-				const choices: string[] = p.choices ?? ['once', 'session', 'always', 'deny']
-				this.turn.steps.push({ kind: 'approval', command: p.command, description: p.description, choices })
-				return {
-					prompt: { generation, id: p.prompt_id, command: p.command, description: p.description, choices },
-				}
+				if (typeof generation !== 'number' || !p.prompt_id || !where) return {}
+				this.approval({
+					command: p.command,
+					description: p.description,
+					choices: p.choices,
+					via: { ...where, generation, id: p.prompt_id },
+				})
+				return {}
 			}
 			case 'approval.settled':
-				return p.prompt_id ? { settled: p.prompt_id } : {}
+				if (p.prompt_id) this.settled(p.prompt_id)
+				return {}
 			case 'clarify.request': {
 				const generation = ev.generation ?? p.execution_generation
 				if (typeof generation !== 'number' || !p.prompt_id || !where) return {}
@@ -190,9 +249,11 @@ export class TurnWriter {
 		return {}
 	}
 
-	/** Mark the open approval answered (`elsewhere` when not from here). */
-	resolve(choice: string) {
-		const step = [...this.turn.steps].reverse().find((s) => s.kind === 'approval' && !s.resolved)
-		if (step?.kind === 'approval') step.resolved = choice
+	/** The approval with this socket prompt id was decided somewhere else or ran out. */
+	private settled(id: string) {
+		const step = this.turn.steps.find(
+			(s): s is ApprovalStep => s.kind === 'approval' && !!s.via && 'id' in s.via && s.via.id === id,
+		)
+		if (step && !step.resolved) step.resolved = 'elsewhere'
 	}
 }

@@ -365,11 +365,11 @@ export const useBots = defineStore('bots', () => {
 		const id = chats[name]?.id
 		if (!id) return { state: 'idle' }
 		// A turn sent from here, or one started elsewhere that the open chat watches live.
+		const waiting = sessions.waitingOn(id)
+		if (waiting === 'approval') return { state: 'waiting', hint: 'Waiting for your approval' }
+		if (waiting === 'answer') return { state: 'asking', hint: 'Waiting for your answer' }
 		const l = sessions.live[id] ?? sessions.botTurns[id]
 		if (l) {
-			if (('approval' in l && l.approval) || l.prompt) return { state: 'waiting', hint: 'Waiting for your approval' }
-			if (l.turn.steps.some((s) => s.kind === 'clarify' && s.answer === undefined))
-				return { state: 'asking', hint: 'Waiting for your answer' }
 			const last = l.turn.steps.at(-1)
 			if (last?.kind === 'tool' && last.status === 'running')
 				return { state: 'working', hint: `Running ${prettyToolName(last.name)}` }
@@ -378,10 +378,7 @@ export const useBots = defineStore('bots', () => {
 			if (!last && l.turn.reasoning) return { state: 'thinking', hint: l.status ?? 'Thinking' }
 			return { state: 'working', hint: l.status ?? 'Working' }
 		}
-		const r = sessions.remote[id]
-		if (r?.approval) return { state: 'waiting', hint: 'Waiting for your approval' }
-		if (r?.clarify?.length) return { state: 'asking', hint: 'Waiting for your answer' }
-		if (r) return { state: 'working' }
+		if (sessions.remote[id]) return { state: 'working' }
 		if (sessions.activeRuns[id]) return { state: 'working' }
 		const err = sessions.lastError[id]
 		if (err) return { state: 'blocked', hint: err }

@@ -1,4 +1,4 @@
-import { contentImages, contentText, type Message } from './gateway'
+import { contentImages, contentText, type ApprovalRequest, type Message } from './gateway'
 
 /**
  * A conversation is rendered as turns. An agent turn is the route the agent took
@@ -19,8 +19,15 @@ export type ApprovalStep = {
 	command?: string
 	description?: string
 	choices: string[]
+	/** Where the decision goes: the run that asked, or the Hermes socket a Bot Chat is watched on. */
+	via?: ApprovalVia
+	/** The choice made here, or `elsewhere` when it was decided or ran out somewhere else. */
 	resolved?: string
 }
+export type ApprovalVia =
+	{ run: ApprovalRequest } | { profile: string; session: string; generation: number; id: string }
+/** What an approval offers when Hermes does not say. */
+export const APPROVAL_CHOICES = ['once', 'session', 'always', 'deny']
 /** A question the agent asks with its clarify tool, waiting for the user's answer. */
 export type ClarifyStep = {
 	kind: 'clarify'

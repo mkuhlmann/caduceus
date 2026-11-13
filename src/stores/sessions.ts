@@ -12,7 +12,14 @@ import {
 	type Message,
 	type Session,
 } from '@/lib/gateway'
-import { type AgentTurn, type ApprovalStep, type ClarifyStep, type Step, type Turn } from '@/lib/turns'
+import {
+	APPROVAL_CHOICES,
+	type AgentTurn,
+	type ApprovalStep,
+	type ClarifyStep,
+	type Step,
+	type Turn,
+} from '@/lib/turns'
 import {
 	lastReplyKey,
 	liveTurns,
@@ -40,9 +47,6 @@ type Live = {
 	turn: AgentTurn
 	user: { text: string; images: string[] }
 	abort: AbortController
-	approval?: ApprovalRequest
-	/** An approval a Bot Chat's turn asks for, answered on the Hermes socket rather than through a run. */
-	prompt?: { profile: string; session: string; generation: number; id: string }
 	status?: string
 	stopRequested?: boolean
 	/** The newest message held when it was sent. Saved ones after it are this turn's, shown live instead. */
@@ -470,13 +474,26 @@ export const useSessions = defineStore('sessions', () => {
 		if (!r) return undefined
 		const waiting: Step[] = []
 		const a = r.approval
-		if (a) {
-			const choices = a.choices ?? ['once', 'session', 'always', 'deny']
-			waiting.push({ kind: 'approval', command: a.command, description: a.description, choices })
-		}
+		if (a)
+			waiting.push({
+				kind: 'approval',
+				command: a.command,
+				description: a.description,
+				choices: a.choices ?? APPROVAL_CHOICES,
+				via: { run: a },
+			})
 		if (r.runId)
 			for (const q of r.clarify ?? []) waiting.push(clarifyStep(q, { run: r.runId, generation: q.generation }))
 		return { kind: 'followed', waiting }
+	}
+
+	/** What the run in this chat waits for from you: a decision on an approval, or an answer to a question. */
+	function waitingOn(id: string): 'approval' | 'answer' | undefined {
+		const tail = tailOf(id)
+		if (!tail) return undefined
+		const steps = tail.kind === 'followed' ? tail.waiting : tail.turn.steps
+		if (steps.some((s) => s.kind === 'approval' && !s.resolved)) return 'approval'
+		if (steps.some((s) => s.kind === 'clarify' && s.answer === undefined)) return 'answer'
 	}
 
 	async function create(opts: { projectId?: string; instructions?: string } = {}) {
@@ -569,17 +586,6 @@ export const useSessions = defineStore('sessions', () => {
 			streamed = true
 			const o = writer.apply(ev, { profile, session: watchSession })
 			if (o.status) l.status = o.status
-			if (o.prompt) {
-				const { generation, id: promptId, command, description, choices } = o.prompt
-				l.prompt = { profile, session: watchSession, generation, id: promptId }
-				l.approval = { run_id: '', command, description, choices }
-			}
-			if (o.settled && l.prompt?.id === o.settled) {
-				// Answered somewhere else (Hermes Desktop, another tab) or run out: this one no longer can.
-				writer.resolve('elsewhere')
-				l.prompt = undefined
-				l.approval = undefined
-			}
 			if (o.gap) {
 				// The view fell behind and Hermes dropped it: read the saved steps instead.
 				streamed = false
@@ -616,63 +622,20 @@ export const useSessions = defineStore('sessions', () => {
 					for await (const ev of events) {
 						tries = 0
 						if (!['run.started', 'run.finished', 'assistant.completed', 'status', 'error'].includes(ev.type)) {
-							if (!streamed && savedTimer !== undefined) {
-								// The stream carries the steps after all: start the turn over from it.
-								turn.steps = []
-								turn.reasoning = ''
-							}
+							// The stream carries the steps after all: start the turn over from it.
+							if (!streamed && savedTimer !== undefined) writer.restart()
 							streamed = true
 						}
-						switch (ev.type) {
-							case 'assistant.delta':
-								writer.text(ev.delta)
-								break
-							case 'reasoning':
-								// A finished block, not a stream: the reasoning was written before it arrived.
-								writer.reasoning(ev.delta, false)
-								break
-							case 'assistant.commentary':
-								writer.commentary(ev.text)
-								break
-							case 'tool.started':
-								writer.toolStarted({ name: ev.tool, preview: ev.preview, args: (ev.args as any) ?? null })
-								if (ev.tool === 'clarify') void watchClarify()
-								break
-							case 'tool.completed':
-								writer.toolDone({ name: ev.tool }, ev.failed)
-								break
-							case 'run.started':
-								writer.flush()
-								l.runId = ev.run_id
-								void watchClarify()
-								if (l.stopRequested) gateway.stopRun(ev.run_id, id).catch(() => l.abort.abort())
-								// Hermes names the chat from the message as the run starts.
-								setTimeout(() => refreshSession(id, true), 1500)
-								break
-							case 'approval.request': {
-								writer.flush()
-								l.approval = ev.request
-								const step: ApprovalStep = {
-									kind: 'approval',
-									command: ev.request.command,
-									description: ev.request.description as string | undefined,
-									choices: ev.request.choices ?? ['once', 'session', 'always', 'deny'],
-								}
-								turn.steps.push(step)
-								break
-							}
-							case 'status':
-								l.status = ev.text
-								break
-							case 'run.finished':
-								writer.flush()
-								if (ev.status === 'failed') turn.error = ev.error || 'The run failed.'
-								if (ev.status === 'completed') usage = ev.usage
-								break
-							case 'error':
-								writer.flush()
-								turn.error = ev.message
-								break
+						const o = writer.applyChat(ev)
+						if (o.status) l.status = o.status
+						if (ev.type === 'tool.started' && ev.tool === 'clarify') void watchClarify()
+						if (ev.type === 'run.finished' && ev.status === 'completed') usage = ev.usage
+						if (ev.type === 'run.started') {
+							l.runId = ev.run_id
+							void watchClarify()
+							if (l.stopRequested) gateway.stopRun(ev.run_id, id).catch(() => l.abort.abort())
+							// Hermes names the chat from the message as the run starts.
+							setTimeout(() => refreshSession(id, true), 1500)
 						}
 					}
 					break
@@ -742,7 +705,6 @@ export const useSessions = defineStore('sessions', () => {
 		/** The newest message saved before the turn's own: the transcript shows up to it while the turn runs. */
 		after?: number
 		status?: string
-		prompt?: Live['prompt']
 	}
 	const botViews: Record<string, BotView> = {}
 	const botTurns = reactive<Record<string, BotTurn>>({})
@@ -807,17 +769,6 @@ export const useSessions = defineStore('sessions', () => {
 		}
 		const o = bt.writer.apply(ev, { profile: sessionProfile(id) ?? 'default', session: view.watch.session })
 		if (o.status) bt.status = o.status
-		if (o.prompt)
-			bt.prompt = {
-				profile: sessionProfile(id) ?? 'default',
-				session: view.watch.session,
-				generation: o.prompt.generation,
-				id: o.prompt.id,
-			}
-		if (o.settled && bt.prompt?.id === o.settled) {
-			bt.writer.resolve('elsewhere')
-			bt.prompt = undefined
-		}
 		if (o.complete || o.gap) void finishBotTurn(id)
 	}
 
@@ -882,15 +833,6 @@ export const useSessions = defineStore('sessions', () => {
 		await settle(id)
 	}
 
-	async function respondOnSocket(p: NonNullable<Live['prompt']>, choice: string) {
-		await post(`ui-api/bots/${encodeURIComponent(p.profile)}/approval`, {
-			session: p.session,
-			generation: p.generation,
-			prompt: p.id,
-			choice,
-		})
-	}
-
 	function recordStats(key: string, stats: RunStats) {
 		saveStats(key, stats)
 		runStats.value = { ...runStats.value, [key]: stats }
@@ -930,53 +872,29 @@ export const useSessions = defineStore('sessions', () => {
 		setTimeout(() => !l.runId && l.abort.abort(), 5000)
 	}
 
-	async function answerApproval(id: string, choice: string) {
-		const l = live[id]
-		const r = remote[id]
-		if (!l && r?.approval) {
-			try {
-				await gateway.approve(r.approval, choice, id)
-				r.approval = undefined
-			} catch (e) {
-				toasts.error(`Could not send the decision: ${(e as Error).message}`)
-			}
-			return
-		}
-		const bt = botTurns[id]
-		if (!l && bt?.prompt) {
-			const p = bt.prompt
-			try {
-				await respondOnSocket(p, choice)
-				bt.writer.resolve(choice)
-				if (bt.prompt === p) bt.prompt = undefined
-			} catch (e) {
-				toasts.error(`Could not send the decision: ${(e as Error).message}`)
-			}
-			return
-		}
-		if (l?.prompt) {
-			const p = l.prompt
-			try {
-				await respondOnSocket(p, choice)
-				const step = [...l.turn.steps].reverse().find((s): s is ApprovalStep => s.kind === 'approval' && !s.resolved)
-				if (step) step.resolved = choice
-				if (l.prompt === p) {
-					l.prompt = undefined
-					l.approval = undefined
-				}
-			} catch (e) {
-				toasts.error(`Could not send the decision: ${(e as Error).message}`)
-			}
-			return
-		}
-		if (!l?.approval) return
+	/** Decide an approval the agent waits for, where it asked: its run, or the Hermes socket a Bot Chat is watched on. */
+	async function answerApproval(id: string, step: ApprovalStep, choice: string) {
+		const v = step.via
+		if (!v || step.resolved) return
 		try {
-			await gateway.approve(l.approval, choice, id)
-			const step = [...l.turn.steps].reverse().find((s): s is ApprovalStep => s.kind === 'approval' && !s.resolved)
-			if (step) step.resolved = choice
-			l.approval = undefined
+			if ('run' in v) await gateway.approve(v.run, choice, id)
+			else
+				await post(`ui-api/bots/${encodeURIComponent(v.profile)}/approval`, {
+					session: v.session,
+					generation: v.generation,
+					prompt: v.id,
+					choice,
+				})
+			step.resolved = choice
+			// A run followed from here shows its approval while Hermes still reports it.
+			const r = remote[id]
+			if (r?.approval && 'run' in v && v.run === r.approval) r.approval = undefined
 		} catch (e) {
-			toasts.error(`Could not send the decision: ${(e as Error).message}`)
+			const err = e as Error & { code?: string }
+			if (err.code === 'approval_not_pending' || err.code === 'stale_generation') {
+				step.resolved = 'elsewhere'
+				toasts.error('That approval was already decided or ran out.')
+			} else toasts.error(`Could not send the decision: ${err.message}`)
 		}
 	}
 
@@ -1207,6 +1125,7 @@ export const useSessions = defineStore('sessions', () => {
 		stop,
 		answerApproval,
 		answerClarify,
+		waitingOn,
 		rename,
 		togglePin,
 		archive,

@@ -318,7 +318,7 @@ const intro = computed(
 		'Hermes can run commands, browse, write files and use its skills on the machine it lives on. You can watch each step and approve risky ones.',
 )
 // The tab names the bot or the chat, and says so when a run waits for an approval, so it shows from another tab.
-const needsApproval = computed(() => !!(live.value?.approval ?? remote.value?.approval))
+const needsApproval = computed(() => !!id.value && sessions.waitingOn(id.value) === 'approval')
 useTitle(() => {
 	const name = bot.value
 		? bot.value.displayName
@@ -628,7 +628,7 @@ async function connectThisBot() {
 									:status="t.live ? (liveStatus ?? botState.hint) : undefined"
 									:tint="liveTint"
 									:stats="statsOf(t.key)"
-									@approve="(c) => id && sessions.answerApproval(id, c)"
+									@approve="(step, c) => id && sessions.answerApproval(id, step, c)"
 									:answer="answerClarify"
 								/>
 							</div>
@@ -637,7 +637,7 @@ async function connectThisBot() {
 								:turn="t"
 								:status="t.live ? liveStatus : undefined"
 								:stats="statsOf(t.key)"
-								@approve="(c) => id && sessions.answerApproval(id, c)"
+								@approve="(step, c) => id && sessions.answerApproval(id, step, c)"
 								:answer="answerClarify"
 							/>
 						</template>

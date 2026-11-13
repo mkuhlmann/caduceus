@@ -23,7 +23,7 @@ const props = defineProps<{
 	/** Answers a clarify question; its promise settles once the answer is sent or has failed. */
 	answer?: (step: ClarifyStep, answer: string) => Promise<void>
 }>()
-const emit = defineEmits<{ approve: [choice: string] }>()
+const emit = defineEmits<{ approve: [step: ApprovalStep, choice: string] }>()
 
 type Segment =
 	| { kind: 'tools'; key: string; steps: ToolStep[] }
@@ -149,7 +149,7 @@ const working = computed(() => {
 							v-for="c in seg.step.choices"
 							:key="c"
 							:class="c === 'deny' ? 'btn-danger' : c === 'once' ? 'btn-primary' : 'btn-outline'"
-							@click="emit('approve', c)"
+							@click="emit('approve', seg.step, c)"
 						>
 							{{ CHOICE_LABELS[c] ?? c }}
 						</button>
