@@ -1,6 +1,7 @@
 import { Elysia } from 'elysia'
 import { mkdirSync, readFileSync, writeFileSync, existsSync } from 'node:fs'
 import { join, dirname } from 'node:path'
+import { broadcast } from './hermes-socket'
 
 /**
  * Your preferences, kept on the Caduceus server so every device you open it on behaves the same. Settings that
@@ -53,5 +54,7 @@ export const preferenceRoutes = new Elysia({ prefix: '/ui-api/preferences' })
 		prefs = next as Preferences
 		mkdirSync(dirname(file), { recursive: true })
 		writeFileSync(file, JSON.stringify(prefs, null, 2))
+		// Other devices take the change at once.
+		broadcast('caduceus.preferences')
 		return prefs
 	})

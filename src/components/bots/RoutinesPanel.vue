@@ -21,8 +21,10 @@ const toasts = useToasts()
 const dialogs = useDialogs()
 
 const TAG = /^\[bot:([a-z0-9][a-z0-9_-]*)\]\s*/i
-const { data, error, pending, reload, mutate } = useResource(`bot-routines:${props.bot.name}`, () =>
-	dashboard.botJobs(props.bot.name),
+const { data, error, pending, reload, mutate } = useResource(
+	`bot-routines:${props.bot.name}`,
+	() => dashboard.botJobs(props.bot.name),
+	{ on: ['cron.changed'] },
 )
 // Hermes' own cron jobs of this profile that are not routines stay on the Schedules page.
 const routines = computed(() =>

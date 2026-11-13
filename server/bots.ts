@@ -3,7 +3,7 @@ import { mkdirSync, readFileSync, writeFileSync, existsSync } from 'node:fs'
 import { join, dirname } from 'node:path'
 import { randomBytes } from 'node:crypto'
 import { relay } from './relay'
-import { rpc, RpcError, viewerSupport } from './hermes-socket'
+import { broadcast, browsersListening, rpc, RpcError, viewerSupport } from './hermes-socket'
 import { readFace } from './face-color'
 
 /**
@@ -382,7 +382,40 @@ async function compactOnAuthority(name: string, sessionId: string) {
 	}
 }
 
+/**
+ * Hermes reports no change to its profiles. While a browser listens for changes, the relay looks every 30 s and
+ * tells every browser (`bots.changed`) when a bot was added, removed or changed: on another device, in Hermes Desktop
+ * or in the terminal. After a change made through Caduceus it looks at once.
+ */
+const BOTS_LOOK_MS = 30_000
+let botsSeen: string | undefined
+let botsTimer: ReturnType<typeof setTimeout> | undefined
+
+async function lookAtBots() {
+	if (!browsersListening()) return
+	try {
+		// Flags that move without the bot changing (its gateway starting, a timestamp) are left out.
+		const seen = JSON.stringify(await profiles(), (k, v) =>
+			k === 'gateway_running' || k.endsWith('_at') ? undefined : v,
+		)
+		if (botsSeen !== undefined && seen !== botsSeen) broadcast('bots.changed')
+		botsSeen = seen
+	} catch {
+		// Hermes is unreachable: the next look tries again.
+	}
+}
+setInterval(() => void lookAtBots(), BOTS_LOOK_MS)
+
+/** Look at the bots shortly, after something that may have changed one. */
+export function botsMayHaveChanged() {
+	clearTimeout(botsTimer)
+	botsTimer = setTimeout(() => void lookAtBots(), 500)
+}
+
 export const botRoutes = new Elysia({ prefix: '/ui-api/bots' })
+	.onAfterResponse(({ request }) => {
+		if (request.method !== 'GET') botsMayHaveChanged()
+	})
 	.get('/', async ({ set }) => {
 		try {
 			const list = await profiles()

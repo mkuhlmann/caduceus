@@ -18,6 +18,7 @@ import { useProjects } from './projects'
 import { forgetTranscript, readTranscript, saveTranscript } from '@/lib/transcript-cache'
 import { fetchOlder, fetchTail, LIVE_TAIL, mergeTail, prependOlder, TAIL, type Tail } from '@/lib/transcript-pages'
 import { onRpcEvent } from '@/lib/rpc'
+import { onResync } from '@/lib/live'
 import { watchBotChat, type BotWatch, type WatchEvent } from '@/lib/bot-watch'
 import { post } from '@/lib/http'
 import { TurnWriter } from '@/lib/turn-writer'
@@ -235,6 +236,30 @@ export const useSessions = defineStore('sessions', () => {
 			listError.value = (e as Error).message
 		} finally {
 			loadingList.value = false
+		}
+	}
+
+	/**
+	 * Read the newest page of chats again, keeping older pages already shown: a chat started, renamed or deleted on
+	 * another device shows here too.
+	 */
+	async function refreshList() {
+		if (!listFresh || loadingList.value) return
+		try {
+			const r = await gateway.sessions({ limit: 60 })
+			const ids = new Set(r.data.map((s) => s.id))
+			const oldest = Math.min(...r.data.map((s) => s.last_active ?? s.started_at ?? Infinity))
+			// Kept: the open one, the ones running from here, Hermes' Bot Chat (hidden from the list's first page), and
+			// those from older pages, below the newest page.
+			const keep = (x: Session) =>
+				x.id === followed ||
+				live[x.id] ||
+				x.title === BOT_CHAT_TITLE ||
+				(r.has_more && (x.last_active ?? x.started_at ?? 0) < oldest)
+			const rest = list.value.filter((x) => !ids.has(x.id) && keep(x))
+			list.value = [...r.data, ...rest]
+		} catch {
+			// The list on screen stays; the next change or return reads it again.
 		}
 	}
 
@@ -1063,6 +1088,13 @@ export const useSessions = defineStore('sessions', () => {
 	}
 	void watchRuns()
 
+	// Back after being away: chats changed elsewhere meanwhile, and the open one may have moved on.
+	onResync(() => {
+		void refreshList()
+		void watchRuns()
+		if (followed && !live[followed]) void poll(followed, true)
+	})
+
 	document.addEventListener('visibilitychange', () => {
 		if (!document.hidden) void watchRuns()
 		if (document.hidden || !followed || live[followed]) return
@@ -1070,6 +1102,16 @@ export const useSessions = defineStore('sessions', () => {
 		const id = followed
 		void poll(id, true)
 	})
+
+	// A running chat writes all the time: the list follows its changes at most every 10 s.
+	let listTimer: ReturnType<typeof setTimeout> | undefined
+	function listSoon() {
+		if (listTimer || document.hidden) return
+		listTimer = setTimeout(() => {
+			listTimer = undefined
+			void refreshList()
+		}, 10_000)
+	}
 
 	// Hermes reports writes to its sessions (from any channel: terminal, Telegram, schedules) at most every 2s.
 	// The open chat reads its newest messages on each; the timers above stay as the fallback without events.
@@ -1081,6 +1123,7 @@ export const useSessions = defineStore('sessions', () => {
 			offChanged?.()
 			offChanged = ok
 				? onRpcEvent('sessions.changed', () => {
+						listSoon()
 						const id = followed
 						if (!id || live[id] || document.hidden) return
 						clearTimeout(changedTimer)

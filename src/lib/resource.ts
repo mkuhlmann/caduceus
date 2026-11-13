@@ -1,4 +1,6 @@
 import { onScopeDispose, ref, shallowRef, toValue, watch, type MaybeRefOrGetter, type Ref } from 'vue'
+import { onResync } from './live'
+import { onRpcEvent } from './rpc'
 
 /**
  * Stale-while-revalidate data for views. The last result per key lives in memory for the whole session,
@@ -10,6 +12,8 @@ import { onScopeDispose, ref, shallowRef, toValue, watch, type MaybeRefOrGetter,
  * - `refreshing` is true while a background reload runs over data that is already on screen.
  * - `reload()` refetches (after a mutation); `mutate(fn)` edits the cached value in place for optimistic updates.
  * - A `null` key means "not ready": nothing loads and `data` stays undefined.
+ * - While in use it loads again when the app comes back from being away (`onResync`), and on each change event
+ *   named in `on` (e.g. `{ on: ['cron.changed'] }`).
  */
 
 type Entry = { data: unknown; at: number }
@@ -56,14 +60,23 @@ export type Resource<T> = {
 	mutate: (fn: (current: T | undefined) => T | undefined) => void
 }
 
-export function useResource<T>(key: MaybeRefOrGetter<string | null>, fetcher: () => Promise<T>): Resource<T> {
+export function useResource<T>(
+	key: MaybeRefOrGetter<string | null>,
+	fetcher: () => Promise<T>,
+	opts: { on?: string[] } = {},
+): Resource<T> {
 	const data = shallowRef<T | undefined>()
 	const error = ref('')
 	const pending = ref(false)
 	const refreshing = ref(false)
 	let current: string | null = null
 	let alive = true
-	onScopeDispose(() => (alive = false))
+	const again = () => (current === null ? undefined : load(current))
+	const offs = [onResync(again), ...(opts.on ?? []).map((type) => onRpcEvent(type, again))]
+	onScopeDispose(() => {
+		alive = false
+		for (const off of offs) off()
+	})
 
 	async function load(k: string) {
 		const hit = cache.get(k)

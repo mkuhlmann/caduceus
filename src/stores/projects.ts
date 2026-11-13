@@ -1,6 +1,8 @@
 import { defineStore } from 'pinia'
 import { ref } from 'vue'
 import { get, post, patch, del } from '@/lib/http'
+import { onResync } from '@/lib/live'
+import { onRpcEvent } from '@/lib/rpc'
 
 export type Project = {
 	id: string
@@ -88,6 +90,11 @@ export const useProjects = defineStore('projects', () => {
 	function forSession(sessionId: string) {
 		return items.value.find((p) => p.sessionIds.includes(sessionId))
 	}
+
+	// Changed on another device: the relay says so, and coming back to the app reads them again.
+	const reread = () => loaded.value && load()
+	onRpcEvent('caduceus.projects', reread)
+	onResync(reread)
 
 	return { items, loaded, refreshing, load, create, update, remove, assign, forSession }
 })

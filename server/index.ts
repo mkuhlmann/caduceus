@@ -6,7 +6,7 @@ import { relay } from './relay'
 import { authGuard, authRoutes } from './auth'
 import { projectRoutes } from './projects'
 import { preferenceRoutes } from './preferences'
-import { botRoutes } from './bots'
+import { botRoutes, botsMayHaveChanged } from './bots'
 import { botWatchRoutes } from './bot-watch'
 import { rpcRoutes, viewerSupport } from './hermes-socket'
 import { runRoutes, trackChatStream } from './runs'
@@ -73,7 +73,12 @@ for (const method of ['GET', 'POST', 'PUT', 'PATCH', 'DELETE']) {
 	app.route(method, '/ui-api/gw/*', async ({ request, params }) =>
 		trackChatStream('/' + params['*'], await relay('gw', '/' + params['*'], request)),
 	)
-	app.route(method, '/ui-api/dash/*', ({ request, params }) => relay('dash', '/' + params['*'], request))
+	app.route(method, '/ui-api/dash/*', async ({ request, params }) => {
+		const res = await relay('dash', '/' + params['*'], request)
+		// A bot's model, description or soul changed straight on the dashboard: other devices hear of it.
+		if (method !== 'GET' && params['*'].startsWith('api/profiles')) botsMayHaveChanged()
+		return res
+	})
 }
 app.get('/*', ({ params, request }) => serveStatic(params['*'], request))
 

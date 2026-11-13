@@ -6,6 +6,8 @@ import { get, patch, post, del, qs } from '@/lib/http'
 import { prettyToolName } from '@/lib/turns'
 import { nearestColor, type BotLook, type BotState } from '@/lib/avatar'
 import { useSessions } from './sessions'
+import { onResync } from '@/lib/live'
+import { onRpcEvent } from '@/lib/rpc'
 
 /** A bot's metadata as Hermes stores it (`ui_meta`, shared with Hermes Desktop), plus whether Caduceus holds its key. */
 type BotMeta = {
@@ -385,6 +387,12 @@ export const useBots = defineStore('bots', () => {
 		if (err) return { state: 'blocked', hint: err }
 		return { state: 'idle' }
 	}
+
+	// Bots added, removed or changed elsewhere (another device, Hermes Desktop, the terminal): the relay notices and
+	// says so, and coming back to the app reads them again in case that message was missed.
+	const reread = () => loaded.value && load()
+	onRpcEvent('bots.changed', reread)
+	onResync(reread)
 
 	// A bot that just finished smiles for a moment before it goes back to idle.
 	const doneUntil = reactive<Record<string, number>>({})

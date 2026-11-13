@@ -2,6 +2,7 @@ import { Elysia } from 'elysia'
 import { mkdirSync, readFileSync, writeFileSync, existsSync } from 'node:fs'
 import { join, dirname } from 'node:path'
 import { randomUUID } from 'node:crypto'
+import { broadcast } from './hermes-socket'
 
 /**
  * Projects group chats and carry standing instructions that are sent as the system
@@ -36,6 +37,8 @@ let projects = load()
 function persist() {
 	mkdirSync(dirname(file), { recursive: true })
 	writeFileSync(file, JSON.stringify(projects, null, 2))
+	// Other devices take the change at once.
+	broadcast('caduceus.projects')
 }
 
 const EDITABLE = ['name', 'description', 'instructions', 'color', 'sessionIds'] as const

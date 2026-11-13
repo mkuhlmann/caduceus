@@ -21,6 +21,7 @@ const tab = ref<'installed' | 'discover'>('installed')
 const res = useResource(
 	() => (app.dashboard?.ok ? 'skills' : null),
 	() => dashboard.skills(),
+	{ on: ['skills.changed'] },
 )
 const skills = computed(() => res.data.value ?? [])
 const error = computed(() => (res.data.value ? '' : res.error.value))

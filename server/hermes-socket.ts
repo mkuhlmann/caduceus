@@ -192,8 +192,22 @@ const ALLOWED = new Set([
 	'image.generate',
 ])
 
-/** Events worth passing to the browser: things that tell an open view to re-read. */
-const FORWARDED = /^(groups\.changed|profiles\.changed|sessions\.changed|image\.|pet\.)/
+/**
+ * Events worth passing to the browser: things that tell an open view to re-read. `bots.changed` and `caduceus.*` are
+ * the relay's own (see `broadcast`).
+ */
+const FORWARDED =
+	/^(groups\.changed|sessions\.changed|cron\.changed|skills\.changed|bots\.changed|caduceus\.|image\.|pet\.)/
+
+/** Tell every browser listening for change events about one the relay made or noticed itself. */
+export function broadcast(type: string, payload: unknown = null) {
+	for (const fn of listeners) fn({ type, payload })
+}
+
+/** Whether any browser listens for change events right now. */
+export function browsersListening() {
+	return listeners.size > 0
+}
 
 export const rpcRoutes = new Elysia({ prefix: '/ui-api/rpc' })
 	.post('/', async ({ body, set }) => {

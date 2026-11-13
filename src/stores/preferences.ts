@@ -1,6 +1,8 @@
 import { defineStore } from 'pinia'
 import { ref } from 'vue'
 import { get, patch } from '@/lib/http'
+import { onResync } from '@/lib/live'
+import { onRpcEvent } from '@/lib/rpc'
 
 /** Preferences kept on the Caduceus server (`server/preferences.ts`), so they follow you to every device. */
 export type Preferences = {
@@ -60,10 +62,10 @@ export const usePreferences = defineStore('preferences', () => {
 		}
 	}
 
-	// Another device may have changed something while this one was in the background.
-	document.addEventListener('visibilitychange', () => {
-		if (document.visibilityState === 'visible') load().catch(() => {})
-	})
+	// Changed on another device: the relay says so, and coming back to the app reads them again.
+	const reread = () => load().catch(() => {})
+	onRpcEvent('caduceus.preferences', reread)
+	onResync(reread)
 
 	return { prefs, load, set }
 })

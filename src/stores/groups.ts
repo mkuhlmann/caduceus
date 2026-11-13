@@ -1,6 +1,7 @@
 import { defineStore } from 'pinia'
 import { computed, reactive, ref } from 'vue'
 import { onRpcEvent, rpc } from '@/lib/rpc'
+import { onResync } from '@/lib/live'
 
 /**
  * Group chats: rooms where several bots and the user talk together. Hermes' gateway hosts and drives them (it
@@ -180,6 +181,13 @@ export const useGroups = defineStore('groups', () => {
 	// Hermes names the rooms that moved; an open one reads its delta, the roster its tail. Rooms reached through
 	// the dashboard do not push, so the roster also re-reads every 15 s while the page is visible.
 	let unsubscribe: (() => void) | null = null
+	// Coming back to the app: rooms changed while it was away, and the open ones moved on.
+	onResync(() => {
+		if (!loaded.value) return
+		void load()
+		for (const id of Object.keys(open)) void refresh(id)
+	})
+
 	function listen() {
 		if (unsubscribe) return
 		const off = onRpcEvent('groups.changed', (payload: { room_ids?: string[] | null } | null) => {

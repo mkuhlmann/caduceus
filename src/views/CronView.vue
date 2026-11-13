@@ -14,7 +14,16 @@ import ScheduleForm from '@/components/schedules/ScheduleForm.vue'
 const toasts = useToasts()
 const dialogs = useDialogs()
 // Cached per session: a revisit paints the last list at once and refreshes it in the background.
-const { data: jobs, error, pending, refreshing, reload, mutate } = useResource('schedules', () => gateway.jobs())
+const {
+	data: jobs,
+	error,
+	pending,
+	refreshing,
+	reload,
+	mutate,
+} = useResource('schedules', () => gateway.jobs(), {
+	on: ['cron.changed'],
+})
 const query = ref('')
 const busyId = ref('')
 const editing = ref<Job | null>(null)
