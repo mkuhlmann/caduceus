@@ -12,7 +12,16 @@ import {
 	type Message,
 	type Session,
 } from '@/lib/gateway'
-import { buildTurns, savedProgress, type AgentTurn, type ApprovalStep, type ClarifyStep, type Turn } from '@/lib/turns'
+import { type AgentTurn, type ApprovalStep, type ClarifyStep, type Step, type Turn } from '@/lib/turns'
+import {
+	lastReplyKey,
+	liveTurns,
+	newestId,
+	savedProgress,
+	startId,
+	turnStartHeld,
+	type LiveTail,
+} from '@/lib/live-tail'
 import { useToasts } from './toast'
 import { useProjects } from './projects'
 import { forgetTranscript, readTranscript, saveTranscript } from '@/lib/transcript-cache'
@@ -94,40 +103,8 @@ function saveList(items: Session[], hasMore: boolean) {
 	}
 }
 
-// Turns are derived from a transcript array that is replaced, never mutated, so they can be cached per array.
-const turnCache = new WeakMap<Message[], Turn[]>()
-function turnsOf(ms: Message[]) {
-	let t = turnCache.get(ms)
-	if (!t) turnCache.set(ms, (t = buildTurns(ms)))
-	return t
-}
-
-// A transcript up to one message, while the turn after it shows live; kept per transcript array like its turns.
-const cutCache = new WeakMap<Message[], { at: number; ms: Message[] }>()
-function upTo(ms: Message[], at: number) {
-	const c = cutCache.get(ms)
-	if (c?.at === at) return c.ms
-	const cut = ms.filter((m) => !(Number(m.id) > at))
-	cutCache.set(ms, { at, ms: cut })
-	return cut
-}
-
 function clarifyStep(q: ClarifyPrompt, via: ClarifyStep['via']): ClarifyStep {
 	return { kind: 'clarify', id: q.id, question: q.question, choices: q.choices, multiSelect: q.multiSelect, via }
-}
-
-// The same, plus the message that started the turn when it was saved after the cut: a Bot Chat's turn can start
-// before Hermes has saved the message (sent from another device) that began it.
-const turnCutCache = new WeakMap<Message[], { at: number; ms: Message[] }>()
-function upToTurn(ms: Message[], at: number) {
-	const c = turnCutCache.get(ms)
-	if (c?.at === at) return c.ms
-	let end = ms.findIndex((m) => Number(m.id) > at)
-	if (end < 0) end = ms.length
-	while (end < ms.length && ms[end]!.role === 'user') end++
-	const cut = ms.slice(0, end)
-	turnCutCache.set(ms, { at, ms: cut })
-	return cut
 }
 
 // Tries at picking up a dropped reply stream while the app is shown, a little further apart each time.
@@ -479,55 +456,27 @@ export const useSessions = defineStore('sessions', () => {
 		return !!loadingOlder[id]
 	}
 
-	/**
-	 * The transcript shown above a turn running from here. Opening the chat again reads it fresh, and by then Hermes
-	 * has saved the message that started the turn (and maybe its first steps): those show live, not twice.
-	 */
-	function beforeLive(ms: Message[], l: Live) {
-		if (l.after !== undefined) return upTo(ms, l.after)
-		// Sent before the chat had loaded: cut at the message itself, the newest one from the user with its text.
-		let i = ms.length - 1
-		while (i >= 0 && ms[i]!.role !== 'user') i--
-		if (i < 0 || contentText(ms[i]!.content).trim() !== l.user.text.trim()) return ms
-		return i === 0 ? [] : upTo(ms, Number(ms[i - 1]!.id))
+	function turnsFor(id: string): Turn[] {
+		return liveTurns(messages[id] ?? [], tailOf(id), { older: !!older[id] })
 	}
 
-	function turnsFor(id: string): Turn[] {
+	/** The running turn as the transcript shows it after its saved messages. */
+	function tailOf(id: string): LiveTail | undefined {
 		const l = live[id]
-		const bt = l ? undefined : botTurns[id]
-		const ms = messages[id] ?? []
-		const all = turnsOf(l ? beforeLive(ms, l) : bt?.after !== undefined ? upToTurn(ms, bt.after) : ms)
-		// A page can start in the middle of the agent's work; that turn shows once its start is loaded.
-		const turns = older[id] && all[0]?.kind === 'agent' && all.length > 1 ? all.slice(1) : [...all]
-		if (l) {
-			turns.push({ kind: 'user', key: 'live-user', text: l.user.text, images: l.user.images })
-			turns.push(l.turn)
-			return turns
-		}
-		if (bt) {
-			turns.push(bt.turn)
-			return turns
-		}
+		if (l) return { kind: 'sent', turn: l.turn, user: l.user, after: l.after }
+		const bt = botTurns[id]
+		if (bt) return { kind: 'watched', turn: bt.turn, after: bt.after }
 		const r = remote[id]
-		if (r) {
-			const last = turns.at(-1)
-			// A copy: the cached turns are shared and must not be marked live.
-			const turn: AgentTurn =
-				last?.kind === 'agent'
-					? { ...last, steps: [...last.steps] }
-					: { kind: 'agent', key: 'remote-agent', steps: [], reasoning: '' }
-			if (last?.kind === 'agent') turns[turns.length - 1] = turn
-			else turns.push(turn)
-			turn.live = true
-			const a = r.approval
-			if (a) {
-				const choices = a.choices ?? ['once', 'session', 'always', 'deny']
-				turn.steps.push({ kind: 'approval', command: a.command, description: a.description, choices })
-			}
-			if (r.runId)
-				for (const q of r.clarify ?? []) turn.steps.push(clarifyStep(q, { run: r.runId, generation: q.generation }))
+		if (!r) return undefined
+		const waiting: Step[] = []
+		const a = r.approval
+		if (a) {
+			const choices = a.choices ?? ['once', 'session', 'always', 'deny']
+			waiting.push({ kind: 'approval', command: a.command, description: a.description, choices })
 		}
-		return turns
+		if (r.runId)
+			for (const q of r.clarify ?? []) waiting.push(clarifyStep(q, { run: r.runId, generation: q.generation }))
+		return { kind: 'followed', waiting }
 	}
 
 	async function create(opts: { projectId?: string; instructions?: string } = {}) {
@@ -555,12 +504,11 @@ export const useSessions = defineStore('sessions', () => {
 				? [{ type: 'text', text }, ...images.map((url) => ({ type: 'image_url', image_url: { url } }))]
 				: text
 		const turn = reactive<AgentTurn>({ kind: 'agent', key: 'live-agent', steps: [], reasoning: '', live: true })
-		const held = (messages[id] ?? []).map((m) => Number(m.id)).filter(Number.isFinite)
 		const l: Live = reactive({
 			turn,
 			user: { text, images },
 			abort: new AbortController(),
-			after: held.length ? Math.max(...held) : undefined,
+			after: newestId(messages[id] ?? []),
 		}) as Live
 		live[id] = l
 		const clock = usePreferences().prefs.runStats ? new RunClock() : null
@@ -605,8 +553,8 @@ export const useSessions = defineStore('sessions', () => {
 			try {
 				const { ms } = await fetchTail(id, LIVE_TAIL * 2)
 				// Nothing held yet: the work starts after the newest message from a person, this one.
-				after ??= Number([...ms].reverse().find((m) => m.role === 'user')?.id ?? NaN)
-				const p = live[id] === l && !streamed && Number.isFinite(after) ? savedProgress(ms, after) : null
+				after ??= startId(ms)
+				const p = live[id] === l && !streamed && after !== undefined ? savedProgress(ms, after) : null
 				if (p && (p.steps.length || p.reasoning)) {
 					turn.steps = p.steps
 					turn.reasoning = p.reasoning
@@ -770,9 +718,8 @@ export const useSessions = defineStore('sessions', () => {
 			if (lost && followed === id) void poll(id, true)
 			await settle(id)
 			if (timing && usage && !failed && !lost) {
-				const last = turnsOf(messages[id] ?? []).at(-1)
-				if (last?.kind === 'agent')
-					recordStats(`${id}:${last.key}`, turnStats(timing, turnTokens(await before, counters(byId(id)), usage)))
+				const key = lastReplyKey(messages[id] ?? [])
+				if (key) recordStats(`${id}:${key}`, turnStats(timing, turnTokens(await before, counters(byId(id)), usage)))
 			}
 		}
 	}
@@ -885,12 +832,12 @@ export const useSessions = defineStore('sessions', () => {
 				if (botTurns[id] !== bt) return
 				const ms = messages[id] ?? []
 				if (!midway) {
-					bt.after = Number(ms.at(-1)?.id ?? NaN)
-					if (ms.at(-1)?.role !== 'user') void awaitStart(id, bt)
+					bt.after = newestId(ms)
+					if (!turnStartHeld(ms, bt.after)) void awaitStart(id, bt)
 					return
 				}
-				bt.after = Number(lastOf(ms, (m) => m.role === 'user')?.id ?? NaN)
-				const p = Number.isFinite(bt.after) ? savedProgress(ms, bt.after!) : null
+				bt.after = startId(ms)
+				const p = bt.after !== undefined ? savedProgress(ms, bt.after) : null
 				// Questions still waiting from before the watch began come after the steps that led to them.
 				const waiting = turn.steps.filter((s) => s.kind === 'approval' || s.kind === 'clarify')
 				if (p && waiting.length === turn.steps.length && !turn.reasoning) {
@@ -910,9 +857,9 @@ export const useSessions = defineStore('sessions', () => {
 	async function awaitStart(id: string, bt: BotTurn, tries = 6) {
 		for (let i = 0; i < tries; i++) {
 			await new Promise((r) => setTimeout(r, START_MS))
-			if (botTurns[id] !== bt || bt.after === undefined) return
+			if (botTurns[id] !== bt) return
 			await refreshTail(id, { limit: LIVE_TAIL }).catch(() => {})
-			if ((messages[id] ?? []).some((m) => m.role === 'user' && Number(m.id) > bt.after!)) return
+			if (turnStartHeld(messages[id] ?? [], bt.after)) return
 		}
 	}
 

@@ -10,7 +10,8 @@
 		"build": "vue-tsc --noEmit && vite build",
 		"build:server": "bun build server/index.ts --compile --outfile dist-bin/caduceus-server",
 		"start": "NODE_ENV=production bun server/index.ts",
-		"typecheck": "vue-tsc --noEmit && tsc -p server --noEmit",
+		"typecheck": "vue-tsc --noEmit && tsc -p server --noEmit && tsc -p test --noEmit",
+		"test": "bun test",
 		"desktop": "bun run build && bun desktop/webview/build.ts && bun desktop/webview/main.ts",
 		"desktop:linux": "bun run build && bun desktop/webview/build.ts linux-x64",
 		"desktop:win": "bun run build && bun desktop/webview/build.ts windows-x64"
