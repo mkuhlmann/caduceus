@@ -25,6 +25,12 @@ const HOP_BY_HOP = new Set([
 	'cookie',
 	'origin',
 	'referer',
+	// Fetch Metadata describes the browser's request to the relay. Passed on, a write would carry the browser's
+	// `same-origin` verdict without the Origin it belongs to, and the dashboard refuses that shape (403).
+	'sec-fetch-site',
+	'sec-fetch-mode',
+	'sec-fetch-dest',
+	'sec-fetch-user',
 	'content-length',
 	'accept-encoding',
 	// Validators belong to the relay, which tags answers itself (compress.ts); Hermes keeps none.
