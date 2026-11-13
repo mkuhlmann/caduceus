@@ -145,6 +145,15 @@ export const dashboard = {
 	search: (q: string, limit = 30) =>
 		get<{ results: SearchHit[] }>(`${DASH}/api/sessions/search${qs({ q, limit })}`).then((r) => r.results),
 	sessionStats: () => get(`${DASH}/api/sessions/stats`),
+	// Speech to text with Hermes' configured provider (`stt` in its config). An empty transcript means no speech was
+	// heard. Always Hermes' own profile: with `?profile=` for a bot, Hermes never answers. Gives up after 3 minutes so
+	// a stuck provider can't hold the composer.
+	transcribe: (dataUrl: string, mimeType: string) =>
+		request<{ transcript: string }>(`${DASH}/api/audio/transcribe`, {
+			method: 'POST',
+			json: { data_url: dataUrl, mime_type: mimeType },
+			signal: AbortSignal.timeout(180_000),
+		}).then((r) => r.transcript ?? ''),
 	// Profiles: Hermes' bots
 	profiles: () => get<{ profiles: Profile[] }>(`${DASH}/api/profiles`).then((r) => r.profiles),
 	profileSoul: (name: string) =>

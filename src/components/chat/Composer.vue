@@ -4,9 +4,13 @@ const drafts = new Map<string, { text: string; images: string[] }>()
 </script>
 
 <script setup lang="ts">
-import { computed, nextTick, ref, watch } from 'vue'
-import { ArrowUp, Square, ImagePlus, X } from 'lucide-vue-next'
+import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
+import { ArrowUp, Check, ImagePlus, Mic, Square, X } from 'lucide-vue-next'
 import { useToasts } from '@/stores/toast'
+import { useApp } from '@/stores/app'
+import { usePreferences } from '@/stores/preferences'
+import { dashboard } from '@/lib/dashboard'
+import { toDataUrl, useRecorder } from '@/lib/voice'
 import BotAvatar from '@/components/bots/BotAvatar.vue'
 import { mentionCandidates, mentionTag, typedMention, type MentionTarget } from '@/lib/mentions'
 import type { BotLook } from '@/lib/avatar'
@@ -38,6 +42,8 @@ const images = ref<string[]>([])
 const area = ref<HTMLTextAreaElement>()
 const fileInput = ref<HTMLInputElement>()
 const dragging = ref(false)
+const app = useApp()
+const preferences = usePreferences()
 
 // @mention autocomplete: typing "@res" offers the bots whose tags start with (or contain) it.
 const typed = ref<{ start: number; query: string } | null>(null)
@@ -89,6 +95,8 @@ watch(text, () => nextTick(grow))
 watch(
 	() => props.draftKey,
 	(key, old) => {
+		discardRecording()
+		caret = null
 		if (old !== undefined) {
 			if (text.value || images.value.length) drafts.set(old, { text: text.value, images: [...images.value] })
 			else drafts.delete(old)
@@ -101,10 +109,11 @@ watch(
 
 function submit() {
 	const t = text.value.trim()
-	if ((!t && !images.value.length) || props.disabled) return
+	if ((!t && !images.value.length) || props.disabled || voiceBusy.value) return
 	emit('send', t, images.value)
 	text.value = ''
 	images.value = []
+	caret = null
 	if (props.draftKey !== undefined) drafts.delete(props.draftKey)
 }
 
@@ -165,6 +174,113 @@ function onDrop(e: DragEvent) {
 	dragging.value = false
 	if (e.dataTransfer?.files.length) addFiles(e.dataTransfer.files)
 }
+
+// Voice input: record, have Hermes transcribe it, then put the text in the box or send it, as chosen in Settings.
+const MAX_SECONDS = 5 * 60
+const meter = ref<HTMLElement>()
+const {
+	state: recording,
+	elapsed,
+	start: startRecorder,
+	stop: stopRecorder,
+	cancel: discardRecording,
+} = useRecorder((level) => meter.value?.style.setProperty('--level', level.toFixed(3)))
+const transcribing = ref(false)
+const voiceBusy = computed(() => recording.value !== 'idle' || transcribing.value)
+const sendsAtOnce = computed(() => preferences.prefs.voiceSubmit === 'send')
+const clock = computed(() => {
+	const s = Math.floor(elapsed.value)
+	return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`
+})
+/** Where the caret was when the box lost focus, so the transcript lands there. */
+let caret: number | null = null
+
+function onBlur() {
+	typed.value = null
+	caret = area.value?.selectionStart ?? null
+}
+
+const finishButton = ref<HTMLButtonElement>()
+
+async function startRecording() {
+	try {
+		await startRecorder()
+		// The mic button just gave way to the finish button; keep keyboard focus on the recording.
+		nextTick(() => finishButton.value?.focus())
+	} catch (e) {
+		toasts.error((e as Error).message)
+	}
+}
+
+function discard() {
+	discardRecording()
+	nextTick(() => area.value?.focus())
+}
+
+watch(elapsed, (s) => {
+	if (s < MAX_SECONDS || recording.value !== 'recording') return
+	toasts.push('Recording stopped at 5 minutes')
+	finishRecording()
+})
+
+async function finishRecording() {
+	const key = props.draftKey
+	const audio = await stopRecorder()
+	if (!audio) return
+	transcribing.value = true
+	let said: string
+	try {
+		said = (await dashboard.transcribe(await toDataUrl(audio), audio.type)).trim()
+	} catch (e) {
+		if ((e as Error).name === 'TimeoutError')
+			return toasts.error('Hermes took too long to turn the recording into text. Try again, or check Speech to text.')
+		return toasts.error(`Could not turn the recording into text. ${(e as Error).message}`)
+	} finally {
+		transcribing.value = false
+	}
+	if (!said) return toasts.error("Didn't catch any speech. Try again a little closer to the microphone.")
+	// Switched to another chat meanwhile: the words belong to the chat they were spoken in.
+	if (key !== props.draftKey) {
+		if (key === undefined) return
+		const d = drafts.get(key) ?? { text: '', images: [] }
+		drafts.set(key, { ...d, text: joinWords(d.text, said, '') })
+		return
+	}
+	insert(said)
+	if (sendsAtOnce.value) submit()
+}
+
+/** `said` between `before` and `after`, with a space on each side where the words would otherwise touch. */
+function joinWords(before: string, said: string, after: string) {
+	const lead = before && !/\s$/.test(before) ? ' ' : ''
+	const trail = after && !/^\s/.test(after) ? ' ' : ''
+	return before + lead + said + trail + after
+}
+
+function insert(said: string) {
+	const at = Math.min(caret ?? text.value.length, text.value.length)
+	const before = text.value.slice(0, at)
+	const after = text.value.slice(at)
+	text.value = joinWords(before, said, after)
+	const pos = text.value.length - after.length
+	caret = pos
+	nextTick(() => {
+		area.value?.focus()
+		area.value?.setSelectionRange(pos, pos)
+	})
+}
+
+// Escape throws a recording away wherever focus is, unless something closer (the @mention list) used it.
+function onEscape(e: KeyboardEvent) {
+	if (e.key !== 'Escape' || e.defaultPrevented) return
+	e.preventDefault()
+	discard()
+}
+watch(
+	() => recording.value !== 'idle',
+	(on) => (on ? window.addEventListener('keydown', onEscape) : window.removeEventListener('keydown', onEscape)),
+)
+onBeforeUnmount(() => window.removeEventListener('keydown', onEscape))
 
 /** Start the draft with `prefix` (e.g. `@handle `), keeping what is typed after it, and put the caret at the end. */
 function seed(prefix: string) {
@@ -241,11 +357,29 @@ defineExpose({ focus: () => area.value?.focus(), seed })
 			@click="updateTyped"
 			@keyup.left="updateTyped"
 			@keyup.right="updateTyped"
-			@blur="typed = null"
+			@blur="onBlur"
 			@paste="onPaste"
 		/>
 		<div class="flex items-center justify-between gap-2 px-2 pb-2">
-			<div class="flex items-center gap-1">
+			<span class="sr-only" aria-live="polite">{{
+				recording === 'recording' ? 'Recording' : transcribing ? 'Transcribing' : ''
+			}}</span>
+			<div v-if="recording !== 'idle'" class="flex min-w-0 items-center gap-2">
+				<button
+					type="button"
+					class="icon-btn"
+					aria-label="Discard recording"
+					title="Discard recording"
+					@click="discard"
+				>
+					<X :size="18" />
+				</button>
+				<span class="size-2 shrink-0 rounded-full bg-rose" aria-hidden="true" />
+				<span class="text-sm text-ink-2 tabular-nums">{{ clock }}</span>
+				<span ref="meter" class="voice-meter" aria-hidden="true"><i v-for="n in 5" :key="n" /></span>
+			</div>
+			<span v-else-if="transcribing" class="px-1 text-xs text-ink-3">Turning your recording into text</span>
+			<div v-else class="flex items-center gap-1">
 				<button
 					v-if="!noImages"
 					type="button"
@@ -270,6 +404,31 @@ defineExpose({ focus: () => area.value?.focus(), seed })
 				<span v-if="running" class="px-1 text-xs text-ink-3">Messages you send now redirect the running agent</span>
 			</div>
 			<div class="flex items-center gap-1.5">
+				<template v-if="app.dashboard?.ok">
+					<button
+						v-if="recording === 'idle'"
+						type="button"
+						class="icon-btn"
+						:disabled="disabled || transcribing"
+						aria-label="Record a message"
+						title="Record a message"
+						@click="startRecording"
+					>
+						<Mic :size="18" />
+					</button>
+					<button
+						v-else
+						type="button"
+						class="icon-btn border border-line"
+						:disabled="recording !== 'recording'"
+						:aria-label="sendsAtOnce ? 'Send recording' : 'Finish recording'"
+						:title="sendsAtOnce ? 'Send recording' : 'Finish recording'"
+						ref="finishButton"
+						@click="finishRecording"
+					>
+						<Check :size="18" />
+					</button>
+				</template>
 				<button
 					v-if="running"
 					type="button"
@@ -285,7 +444,7 @@ defineExpose({ focus: () => area.value?.focus(), seed })
 					class="grid size-8 place-items-center rounded-full transition-opacity disabled:opacity-30"
 					:class="accent ? 'text-white' : 'bg-ink text-bg'"
 					:style="accent ? { background: accent } : undefined"
-					:disabled="disabled || (!text.trim() && !images.length)"
+					:disabled="disabled || voiceBusy || (!text.trim() && !images.length)"
 					aria-label="Send"
 				>
 					<ArrowUp :size="17" />
@@ -294,3 +453,31 @@ defineExpose({ focus: () => area.value?.focus(), seed })
 		</div>
 	</form>
 </template>
+
+<style scoped>
+/* Five bars that follow the microphone's level (--level, 0–1, set every frame from the recorder). */
+.voice-meter {
+	display: flex;
+	align-items: center;
+	gap: 2px;
+	height: 16px;
+}
+.voice-meter i {
+	width: 3px;
+	height: 100%;
+	border-radius: 9999px;
+	background: var(--ink-3);
+	transform: scaleY(max(0.18, calc(var(--level, 0) * var(--w))));
+}
+.voice-meter i:nth-child(1),
+.voice-meter i:nth-child(5) {
+	--w: 0.55;
+}
+.voice-meter i:nth-child(2),
+.voice-meter i:nth-child(4) {
+	--w: 0.85;
+}
+.voice-meter i:nth-child(3) {
+	--w: 1;
+}
+</style>

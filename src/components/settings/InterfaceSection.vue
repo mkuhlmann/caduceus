@@ -1,7 +1,20 @@
 <script setup lang="ts">
 import { useApp } from '@/stores/app'
+import { usePreferences, type Preferences } from '@/stores/preferences'
+import { useToasts } from '@/stores/toast'
 import ToggleSwitch from './ToggleSwitch.vue'
 const app = useApp()
+const preferences = usePreferences()
+const toasts = useToasts()
+
+async function setVoiceSubmit(v: Preferences['voiceSubmit']) {
+	try {
+		await preferences.set('voiceSubmit', v)
+		toasts.push('Voice input saved')
+	} catch (e) {
+		toasts.error(`Could not save the voice setting. ${(e as Error).message}`)
+	}
+}
 </script>
 
 <template>
@@ -48,6 +61,21 @@ const app = useApp()
 		</select>
 		<p class="mt-1 text-sm text-ink-2">
 			Where Caduceus opens, here and when installed on a phone. Saved in this browser only.
+		</p>
+
+		<label class="label mt-6" for="ui-voice">After a voice recording</label>
+		<select
+			id="ui-voice"
+			class="field"
+			:value="preferences.prefs.voiceSubmit"
+			@change="setVoiceSubmit(($event.target as HTMLSelectElement).value as Preferences['voiceSubmit'])"
+		>
+			<option value="fill">Put the text in the message box to check first</option>
+			<option value="send">Send it right away</option>
+		</select>
+		<p class="mt-1 text-sm text-ink-2">
+			What happens when you finish recording with the microphone next to the send button. Hermes turns your voice into
+			text with the provider set under Speech to text. Saved on the Caduceus server, so it applies on all your devices.
 		</p>
 	</div>
 </template>

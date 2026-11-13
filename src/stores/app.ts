@@ -2,6 +2,7 @@ import { defineStore } from 'pinia'
 import { ref, watch, watchEffect } from 'vue'
 import { get, put, post } from '@/lib/http'
 import { setTranscriptScope } from '@/lib/transcript-cache'
+import { usePreferences } from '@/stores/preferences'
 
 export type ConnectionInfo = {
 	gatewayUrl: string
@@ -78,6 +79,9 @@ export const useApp = defineStore('app', () => {
 			ready.value = true
 			return
 		}
+		usePreferences()
+			.load()
+			.catch(() => {})
 		connection.value = await get('ui-api/connection')
 		setTranscriptScope(connection.value?.gatewayUrl ?? '')
 		// Assume the last known state so the UI paints at once; the probe corrects it.

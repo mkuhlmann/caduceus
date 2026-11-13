@@ -5,6 +5,7 @@ import { getConnection, saveConnection, publicConnection, envLocked } from './co
 import { relay } from './relay'
 import { authGuard, authRoutes } from './auth'
 import { projectRoutes } from './projects'
+import { preferenceRoutes } from './preferences'
 import { botRoutes } from './bots'
 import { botWatchRoutes } from './bot-watch'
 import { rpcRoutes, viewerSupport } from './hermes-socket'
@@ -30,6 +31,7 @@ const app = new Elysia()
 	.use(authRoutes)
 	.onBeforeHandle({ as: 'global' }, authGuard)
 	.use(projectRoutes)
+	.use(preferenceRoutes)
 	.use(botRoutes)
 	.use(botWatchRoutes)
 	.use(rpcRoutes)
