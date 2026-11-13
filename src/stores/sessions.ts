@@ -52,6 +52,8 @@ const RUNS_MS = 4000
 const CLARIFY_MS = 1000
 // How often a Bot Chat's saved steps are read while the bot works.
 const SAVED_MS = 1500
+// How often a Bot Chat's turn looks for the saved message that began it.
+const START_MS = 1000
 // Hermes titles a chat instantly from the first message, then upgrades it with a model in the background,
 // often after the run has ended. Look again a few times so the better title shows up.
 const TITLE_CHECKS_MS = [4000, 12000, 30000]
@@ -111,6 +113,20 @@ function upTo(ms: Message[], at: number) {
 
 function clarifyStep(q: ClarifyPrompt, via: ClarifyStep['via']): ClarifyStep {
 	return { kind: 'clarify', id: q.id, question: q.question, choices: q.choices, multiSelect: q.multiSelect, via }
+}
+
+// The same, plus the message that started the turn when it was saved after the cut: a Bot Chat's turn can start
+// before Hermes has saved the message (sent from another device) that began it.
+const turnCutCache = new WeakMap<Message[], { at: number; ms: Message[] }>()
+function upToTurn(ms: Message[], at: number) {
+	const c = turnCutCache.get(ms)
+	if (c?.at === at) return c.ms
+	let end = ms.findIndex((m) => Number(m.id) > at)
+	if (end < 0) end = ms.length
+	while (end < ms.length && ms[end]!.role === 'user') end++
+	const cut = ms.slice(0, end)
+	turnCutCache.set(ms, { at, ms: cut })
+	return cut
 }
 
 function lastOf<T>(xs: T[], ok: (x: T) => unknown) {
@@ -422,7 +438,7 @@ export const useSessions = defineStore('sessions', () => {
 		const l = live[id]
 		const bt = l ? undefined : botTurns[id]
 		const ms = messages[id] ?? []
-		const all = turnsOf(l ? beforeLive(ms, l) : bt?.after !== undefined ? upTo(ms, bt.after) : ms)
+		const all = turnsOf(l ? beforeLive(ms, l) : bt?.after !== undefined ? upToTurn(ms, bt.after) : ms)
 		// A page can start in the middle of the agent's work; that turn shows once its start is loaded.
 		const turns = older[id] && all[0]?.kind === 'agent' && all.length > 1 ? all.slice(1) : [...all]
 		if (l) {
@@ -789,6 +805,7 @@ export const useSessions = defineStore('sessions', () => {
 				const ms = messages[id] ?? []
 				if (!midway) {
 					bt.after = Number(ms.at(-1)?.id ?? NaN)
+					if (ms.at(-1)?.role !== 'user') void awaitStart(id, bt)
 					return
 				}
 				bt.after = Number(lastOf(ms, (m) => m.role === 'user')?.id ?? NaN)
@@ -802,6 +819,20 @@ export const useSessions = defineStore('sessions', () => {
 			})
 			.catch(() => {})
 		return bt
+	}
+
+	/**
+	 * The turn started before the message that began it was saved (sent from another device): read the chat again
+	 * until it is there, so it shows above the turn rather than only once the turn ends. A turn that no message began
+	 * (a routine) stops looking after a few tries.
+	 */
+	async function awaitStart(id: string, bt: BotTurn, tries = 6) {
+		for (let i = 0; i < tries; i++) {
+			await new Promise((r) => setTimeout(r, START_MS))
+			if (botTurns[id] !== bt || bt.after === undefined) return
+			await refreshTail(id, { limit: LIVE_TAIL }).catch(() => {})
+			if ((messages[id] ?? []).some((m) => m.role === 'user' && Number(m.id) > bt.after!)) return
+		}
 	}
 
 	async function finishBotTurn(id: string) {
