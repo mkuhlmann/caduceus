@@ -2,6 +2,7 @@ import { defineStore } from 'pinia'
 import { computed, reactive, ref, shallowReactive, shallowRef, watch } from 'vue'
 import {
 	BOT_CHAT_TITLE,
+	contentText,
 	gateway,
 	pendingApproval,
 	pendingClarify,
@@ -34,6 +35,8 @@ type Live = {
 	prompt?: { profile: string; session: string; generation: number; id: string }
 	status?: string
 	stopRequested?: boolean
+	/** The newest message held when it was sent. Saved ones after it are this turn's, shown live instead. */
+	after?: number
 }
 
 /** A run of the open session that this tab did not start: another tab, device or channel. */
@@ -402,12 +405,26 @@ export const useSessions = defineStore('sessions', () => {
 		return !!loadingOlder[id]
 	}
 
+	/**
+	 * The transcript shown above a turn running from here. Opening the chat again reads it fresh, and by then Hermes
+	 * has saved the message that started the turn (and maybe its first steps): those show live, not twice.
+	 */
+	function beforeLive(ms: Message[], l: Live) {
+		if (l.after !== undefined) return upTo(ms, l.after)
+		// Sent before the chat had loaded: cut at the message itself, the newest one from the user with its text.
+		let i = ms.length - 1
+		while (i >= 0 && ms[i]!.role !== 'user') i--
+		if (i < 0 || contentText(ms[i]!.content).trim() !== l.user.text.trim()) return ms
+		return i === 0 ? [] : upTo(ms, Number(ms[i - 1]!.id))
+	}
+
 	function turnsFor(id: string): Turn[] {
-		const bt = live[id] ? undefined : botTurns[id]
-		const all = turnsOf(bt?.after !== undefined ? upTo(messages[id] ?? [], bt.after) : (messages[id] ?? []))
+		const l = live[id]
+		const bt = l ? undefined : botTurns[id]
+		const ms = messages[id] ?? []
+		const all = turnsOf(l ? beforeLive(ms, l) : bt?.after !== undefined ? upTo(ms, bt.after) : ms)
 		// A page can start in the middle of the agent's work; that turn shows once its start is loaded.
 		const turns = older[id] && all[0]?.kind === 'agent' && all.length > 1 ? all.slice(1) : [...all]
-		const l = live[id]
 		if (l) {
 			turns.push({ kind: 'user', key: 'live-user', text: l.user.text, images: l.user.images })
 			turns.push(l.turn)
@@ -464,7 +481,13 @@ export const useSessions = defineStore('sessions', () => {
 				? [{ type: 'text', text }, ...images.map((url) => ({ type: 'image_url', image_url: { url } }))]
 				: text
 		const turn = reactive<AgentTurn>({ kind: 'agent', key: 'live-agent', steps: [], reasoning: '', live: true })
-		const l: Live = reactive({ turn, user: { text, images }, abort: new AbortController() }) as Live
+		const held = (messages[id] ?? []).map((m) => Number(m.id)).filter(Number.isFinite)
+		const l: Live = reactive({
+			turn,
+			user: { text, images },
+			abort: new AbortController(),
+			after: held.length ? Math.max(...held) : undefined,
+		}) as Live
 		live[id] = l
 		const clock = usePreferences().prefs.runStats ? new RunClock() : null
 		const before = clock ? gateway.session(id).then(counters, () => null) : null
@@ -501,8 +524,7 @@ export const useSessions = defineStore('sessions', () => {
 		let watchSession = ''
 		let streamed = false
 		let savedTimer: ReturnType<typeof setTimeout> | undefined
-		const heldIds = (messages[id] ?? []).map((m) => Number(m.id)).filter(Number.isFinite)
-		let after = heldIds.length ? Math.max(...heldIds) : undefined
+		let after = l.after
 		const watchSaved = async () => {
 			if (live[id] !== l || streamed) return
 			try {
