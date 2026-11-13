@@ -10,6 +10,8 @@ export type TurnFeed = { event(ev: WatchEvent): void; end(): void }
 export type BotChatWatch = {
 	/** The id Hermes uses for the chat in its events and approvals. */
 	readonly session: string
+	/** Events arrive now; false while the watch attaches again after the relay lost Hermes' socket. */
+	readonly connected: boolean
 	/**
 	 * Take the events of the turn being sent from here. A turn already running keeps its own feed (this message
 	 * waits behind it); the next one goes to `feed` until released. Release with `goesOn` when the turn continues
@@ -62,6 +64,7 @@ export async function watchBotChat(
 		return null
 	}
 	let session = first.ready.session
+	let connected = true
 	let closed = false
 	let retry: ReturnType<typeof setTimeout> | undefined
 	// Turns that ended: their late events start nothing.
@@ -69,11 +72,13 @@ export async function watchBotChat(
 	let current: { generation: number | null; feed?: TurnFeed } | null = null
 	let claimed: { skip: number | null; feed: (ev: WatchEvent) => void; generation?: number } | null = null
 
-	const endCurrent = () => {
+	// `finished`: the turn ended, so its late events start nothing. A turn whose view dropped may still run, and
+	// shows again when the watch attaches.
+	const endCurrent = (finished = true) => {
 		const c = current
 		current = null
 		if (!c) return
-		if (c.generation !== null) done.add(c.generation)
+		if (finished && c.generation !== null) done.add(c.generation)
 		c.feed?.end()
 	}
 	const isClaimed = (generation: number | null) => !!claimed && (claimed.skip === null || generation !== claimed.skip)
@@ -122,7 +127,8 @@ export async function watchBotChat(
 		}
 		if (closed) return
 		// The relay lost Hermes' socket. A turn sent from here still ends with its own stream.
-		endCurrent()
+		connected = false
+		endCurrent(false)
 		if (opts.reattach) again(0)
 	}
 
@@ -135,6 +141,7 @@ export async function watchBotChat(
 				if (closed || !next) abort.abort()
 				if (closed) return
 				if (!next) return again(tries + 1)
+				connected = true
 				attached(next.ready)
 				void pump(next.events)
 			},
@@ -148,6 +155,9 @@ export async function watchBotChat(
 	return {
 		get session() {
 			return session
+		},
+		get connected() {
+			return connected
 		},
 		claim(feed) {
 			const c = { skip: current?.generation ?? null, feed } as NonNullable<typeof claimed>

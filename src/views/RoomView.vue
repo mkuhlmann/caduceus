@@ -249,6 +249,8 @@ watch(
 		groups.listen()
 		await groups.openRoom(id)
 		scrollDown(true)
+		// The last room's backstop may be far off: this one polls on its own terms from now.
+		poll.soon(POLL_MS)
 	},
 	{ immediate: true },
 )

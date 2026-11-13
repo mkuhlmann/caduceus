@@ -148,6 +148,36 @@ describe('the relay losing the socket', () => {
 		w.close()
 	})
 
+	test('a turn still running at the new attach shows again, with what it waits for', async () => {
+		const first = new FakeView()
+		const second = new FakeView({
+			session: 'hs1',
+			running: true,
+			generation: 6,
+			prompts: [{ kind: 'approval', prompt_id: 'p1' }],
+		})
+		const r = recorder()
+		const w = (await watchBotChat('scout', 's1', { onTurn: r.onTurn, reattach: true }, sourceOf(first, second)))!
+		first.send('message.delta', 6)
+		await tick()
+		first.end()
+		await tick()
+		expect(w.connected).toBe(false)
+		await new Promise((done) => setTimeout(done, 2100))
+		expect(w.connected).toBe(true)
+		second.send('message.delta', 6)
+		await tick()
+		expect(r.log).toEqual([
+			'start 6',
+			'6: message.delta',
+			'end 6',
+			'start 6 midway',
+			'6: approval.request',
+			'6: message.delta',
+		])
+		w.close()
+	})
+
 	test('cannot view the chat at all', async () => {
 		expect(await watchBotChat('scout', 's1', {}, sourceOf())).toBeNull()
 	})

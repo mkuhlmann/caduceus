@@ -632,7 +632,11 @@ export const useSessions = defineStore('sessions', () => {
 				after ??= startId(ms)
 				const p = live[id] === l && !streamed && after !== undefined ? savedProgress(ms, after) : null
 				if (p && (p.steps.length || p.reasoning)) {
-					turn.steps = p.steps
+					// What the turn still waits for was asked on the socket, not saved: it stays after the saved steps.
+					const waiting = turn.steps.filter(
+						(s) => (s.kind === 'approval' && !s.resolved) || (s.kind === 'clarify' && s.answer === undefined),
+					)
+					turn.steps = [...p.steps, ...waiting]
 					turn.reasoning = p.reasoning
 				}
 			} catch {
@@ -655,7 +659,8 @@ export const useSessions = defineStore('sessions', () => {
 		// bot's message, a routine) is not this one: this message waits behind it, and that turn keeps its own place.
 		watch = botViews[id] ?? (isBotChat(id) ? (ownWatch = await watchBotChat(profile, id)) : null)
 		const release = watch?.claim(onWatch)
-		if (!watch && isBotChat(id)) savedTimer = setTimeout(watchSaved, SAVED_MS)
+		// No view of the chat, or one attaching again: read the saved steps until its events arrive.
+		if (!watch?.connected && isBotChat(id)) savedTimer = setTimeout(watchSaved, SAVED_MS)
 
 		// The relay keeps the turn's stream. When the connection drops (the phone slept, the network changed), the turn
 		// picks it up again where it broke off once the device is back.
@@ -753,15 +758,19 @@ export const useSessions = defineStore('sessions', () => {
 		return byId(id)?.title === BOT_CHAT_TITLE
 	}
 
+	// Chats whose watch is attaching: one at a time, so a second cannot replace the turn the first shows.
+	const attaching = new Set<string>()
+
 	async function watchBot(id: string) {
-		if (botViews[id] || !isBotChat(id) || useApp().liveBots === false) return
+		if (botViews[id] || attaching.has(id) || !isBotChat(id) || useApp().liveBots === false) return
 		const profile = sessionProfile(id) ?? 'default'
 		let mine: BotTurn | undefined
+		attaching.add(id)
 		const w = await watchBotChat(profile, id, {
 			reattach: true,
 			onTurn: (_generation, midway, session) => {
-				// Running as the chat opened while this tab sends one: that is the turn shown.
-				if (midway && live[id]) return undefined
+				// A turn sent from here that this watch did not see start shows here too; while it is sent, the turn
+				// sent from here is the one on screen.
 				const bt = (mine = startBotTurn(id, midway))
 				return {
 					event(ev) {
@@ -772,7 +781,7 @@ export const useSessions = defineStore('sessions', () => {
 					end: () => void finishBotTurn(id, bt),
 				}
 			},
-		})
+		}).finally(() => attaching.delete(id))
 		if (!w) return
 		if (followed !== id || botViews[id]) {
 			w.close()
