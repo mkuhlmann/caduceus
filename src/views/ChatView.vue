@@ -108,42 +108,6 @@ const statsOf = (turnKey: string) =>
 // The face beside a reply is alive only on the newest one; earlier replies show it still.
 const lastAgentKey = computed(() => [...shownTurns.value].reverse().find((t) => t.kind === 'agent')?.key)
 
-/**
- * A bot's face rides beside its newest output while it works, so its state stays in view as the chat follows the
- * reply. When the run ends the saved reply takes the live one's place, and the face jumps from where it was up to
- * the top of the reply. Both positions are pinned to the visible part of the chat, so the jump never leaves it.
- */
-const liveAgentKey = computed(() => shownTurns.value.find((t) => t.kind === 'agent' && t.live)?.key)
-const faceOf = (key: string) => scroller.value?.querySelector<HTMLElement>(`[data-face="${CSS.escape(key)}"]`)
-watch(
-	liveAgentKey,
-	(now, before) => {
-		if (!before || now || !bot.value || matchMedia('(prefers-reduced-motion: reduce)').matches) return
-		// Runs before the update: this is where the face is now. The saved reply can land a moment before the live
-		// one leaves, pushing it down for a layout nobody sees; the face was last painted inside the chat, pinned.
-		const old = faceOf(before)?.getBoundingClientRect()
-		const view = scroller.value?.getBoundingClientRect()
-		if (!old || !view) return
-		const from = Math.min(old.top, view.bottom - 12 - old.height)
-		nextTick(() => {
-			const key = lastAgentKey.value
-			const face = key ? faceOf(key) : undefined
-			if (!face) return
-			const dy = from - face.getBoundingClientRect().top
-			if (dy < 8) return
-			face.animate(
-				[
-					{ transform: `translateY(${dy}px)` },
-					{ transform: 'translateY(-6px)', offset: 0.7 },
-					{ transform: 'translateY(0)' },
-				],
-				{ duration: Math.min(560, 320 + dy / 4), easing: 'cubic-bezier(0.22, 1, 0.36, 1)' },
-			)
-		})
-	},
-	{ flush: 'pre' },
-)
-
 const scroller = ref<HTMLElement>()
 const content = ref<HTMLElement>()
 const composer = ref<InstanceType<typeof Composer>>()
@@ -642,9 +606,9 @@ async function connectThisBot() {
 								</div>
 							</div>
 							<div v-else-if="bot" class="flex gap-3">
-								<!-- While the bot works its face sits beside the newest output; then at the reply's top. -->
-								<div class="flex shrink-0 flex-col" :class="{ 'justify-end': t.live }">
-									<div class="sticky flex" :class="t.live ? 'bottom-3' : 'top-3 mt-0.5'" :data-face="t.key">
+								<!-- The face sits beside the reply's newest line, pinned to the bottom of the visible chat. -->
+								<div class="flex shrink-0 flex-col justify-end">
+									<div class="sticky bottom-3 flex">
 										<BotAvatar
 											:seed="bot.name"
 											:look="bot.look"
