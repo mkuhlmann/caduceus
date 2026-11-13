@@ -69,7 +69,7 @@ const healthy = computed(() => app.gateway?.ok && (app.dashboard?.ok ?? true))
 			<component :is="themeIcon" :size="18" />
 		</button>
 		<RouterLink
-			to="/connect"
+			to="/settings/connection"
 			class="hidden items-center justify-center rounded-md p-2 md:flex"
 			:title="healthy ? 'Connected to Hermes' : 'Connection needs attention'"
 		>

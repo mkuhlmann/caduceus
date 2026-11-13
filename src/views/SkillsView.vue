@@ -78,7 +78,7 @@ const used = (n: number) => (n === 0 ? 'Not used yet' : n === 1 ? 'Used once' : 
 			title="Connect the dashboard to manage skills"
 			body="Skills are managed through the Hermes dashboard."
 		>
-			<RouterLink to="/connect" class="btn-primary">Open connection settings</RouterLink>
+			<RouterLink to="/settings/connection" class="btn-primary">Open connection settings</RouterLink>
 		</EmptyState>
 
 		<div v-else class="px-6 pb-16 md:px-10">

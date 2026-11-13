@@ -24,7 +24,7 @@ onMounted(async () => {
 	} catch {
 		app.ready = true
 	}
-	if (app.connection && !app.gateway?.ok && !app.dashboard?.ok) router.replace('/connect')
+	if (app.connection && !app.gateway?.ok && !app.dashboard?.ok) router.replace('/settings/connection')
 })
 </script>
 

@@ -186,7 +186,7 @@ onBeforeUnmount(() => {
 			title="Connect the dashboard to see the board"
 			body="The board lives in the Hermes dashboard. Add its address on the connection page."
 		>
-			<RouterLink to="/connect" class="btn-primary">Open connection settings</RouterLink>
+			<RouterLink to="/settings/connection" class="btn-primary">Open connection settings</RouterLink>
 		</EmptyState>
 
 		<template v-else>

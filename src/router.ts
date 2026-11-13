@@ -68,17 +68,13 @@ export const router = createRouter({
 		{ path: '/board', name: 'board', component: () => import('./views/KanbanView.vue'), meta: { title: 'Board' } },
 		{ path: '/skills', name: 'skills', component: () => import('./views/SkillsView.vue'), meta: { title: 'Skills' } },
 		{
-			path: '/settings',
+			path: '/settings/:section?',
 			name: 'settings',
 			component: () => import('./views/SettingsView.vue'),
 			meta: { title: 'Settings' },
 		},
-		{
-			path: '/connect',
-			name: 'connect',
-			component: () => import('./views/ConnectView.vue'),
-			meta: { title: 'Connection' },
-		},
+		// The connection settings used to be a page of their own; old links and bookmarks land on them in Settings.
+		{ path: '/connect', redirect: '/settings/connection' },
 	],
 })
 

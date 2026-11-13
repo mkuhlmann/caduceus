@@ -161,7 +161,7 @@ async function onDrop(e: DragEvent, section: BotSection | null) {
 			title="Bots need the dashboard"
 			body="Hermes manages bots through its dashboard. Add the dashboard URL on the connection page to see and create them."
 		>
-			<RouterLink to="/connect" class="btn-outline">Open connection settings</RouterLink>
+			<RouterLink to="/settings/connection" class="btn-outline">Open connection settings</RouterLink>
 		</EmptyState>
 
 		<div v-else class="px-6 pb-16 md:px-10">

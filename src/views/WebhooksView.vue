@@ -118,7 +118,7 @@ function created() {
 			title="Webhooks need the dashboard"
 			body="Webhooks are managed through the Hermes dashboard, which is not connected yet."
 		>
-			<router-link to="/connect" class="btn-outline">Open connection settings</router-link>
+			<router-link to="/settings/connection" class="btn-outline">Open connection settings</router-link>
 		</EmptyState>
 
 		<div v-else class="relative px-6 pb-16 md:px-10">
