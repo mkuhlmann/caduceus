@@ -10,6 +10,17 @@
  * mock data. `MOCK_PORT` changes the port, `CADUCEUS_DIST` the built UI it serves. Requests it does not know are
  * logged as "unhandled" and answered with a 404, so a new view shows what still needs mocking.
  *
+ * Live runs, for clicking through what a reply does as it runs (its log says what reached it):
+ *
+ *   - A message streams a reply with a tool call, saved to the chat as it goes, as Hermes does.
+ *   - "approve" in a message makes the run ask for an approval; it waits until it is answered.
+ *   - "drop" in a message breaks the connection once mid-reply, so the browser has to rejoin the stream.
+ *   - In a Bot Chat the chat stream says nothing until the end; the turn streams on the bot's watch instead.
+ *   - Scout's Bot Chat runs elsewhere and waits for an approval, until it is answered from here.
+ *   - curl -X POST 'localhost:7899/ui-api/mock/elsewhere?bot=ops'   a Bot Chat turn from another device, asking
+ *     for an approval (`&text=` sets its message)
+ *   - curl -X POST localhost:7899/ui-api/mock/drop-watches          the relay loses Hermes' socket: watches end
+ *
  * Screenshots at 2x (2880×1800 for a 1440×900 layout), when the browser caps screenshots at 1280 px wide but not
  * in height: set the viewport to 1280×1800, run this in the page, and take one screenshot per offset:
  *
@@ -350,8 +361,13 @@ const jobs = [
 const json = (data: unknown, status = 200) =>
 	new Response(JSON.stringify(data), { status, headers: { 'content-type': 'application/json' } })
 
+/** A chat's messages; one without a story of its own gets a greeting, kept so its ids stay put across reads. */
+function transcriptOf(id: string) {
+	return (transcripts[id] ??= [user(ago(60), 'Hello'), say(ago(59), 'Hi! How can I help?')])
+}
+
 function messagesFor(id: string, url: URL) {
-	const all = transcripts[id] ?? [user(ago(60), 'Hello'), say(ago(59), 'Hi! How can I help?')]
+	const all = transcriptOf(id)
 	const limit = Number(url.searchParams.get('limit') ?? 120)
 	return json({ data: all.slice(-limit), pagination: { limit, offset: 0, order: 'latest', returned: all.length } })
 }
@@ -403,6 +419,8 @@ Bun.serve({
 			return (await f.exists()) ? new Response(f) : new Response(Bun.file(DIST + 'index.html'))
 		}
 		p = p.slice('/ui-api/'.length)
+		const extra = await scenario(req, url, p)
+		if (extra) return extra
 		if (p === 'auth') return json({ required: false, authenticated: true })
 		if (p === 'connection')
 			return json({
@@ -416,7 +434,7 @@ Bun.serve({
 			})
 		if (p === 'connection/test')
 			return json({ gateway: { ok: true, status: 200 }, dashboard: { ok: true, status: 200 } })
-		if (p === 'runs') return json({ 'bot-scout': 'run-scout' })
+		if (p === 'runs') return json({ 'bot-scout': 'run-scout', ...activeRuns })
 		if (p === 'bots') return json(bots)
 		if (p === 'projects') return json([])
 		if (p === 'rpc' && req.method === 'POST') {
@@ -450,7 +468,22 @@ Bun.serve({
 				return found ? json({ session: found }) : json({ error: 'not found' }, 404)
 			}
 			s = /^v1\/runs\/([^/]+)$/.exec(rest)
-			if (s) return json({ run_id: s[1], status: 'running' })
+			if (s && s[1] === 'run-scout')
+				return json({
+					run_id: 'run-scout',
+					status: scoutApproved ? 'running' : 'waiting_for_approval',
+					pending_controls: scoutApproved
+						? []
+						: [
+								{
+									kind: 'approval',
+									prompt_id: 'scout-p1',
+									command: 'curl -sL https://example.com/feed.xml | head',
+									description: 'Fetch a feed from the web',
+								},
+							],
+				})
+			if (s) return json({ run_id: s[1], status: activeRunIds.has(s[1]!) ? 'running' : 'completed' })
 			if (rest === 'api/jobs') return json({ jobs })
 		}
 		m = /^dash\/(.*)$/.exec(p)
@@ -475,3 +508,261 @@ Bun.serve({
 	},
 })
 console.log(`Mock relay on http://127.0.0.1:${PORT}, serving ${DIST}`)
+
+// ── Live runs (see the header) ─────────────────────────────────────────────────────────────────────────────
+const enc = new TextEncoder()
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
+const activeRuns: Record<string, string> = {}
+const activeRunIds = new Set<string>()
+let scoutApproved = false
+const waiters = new Map<string, () => void>()
+const waitFor = (key: string) => new Promise<void>((r) => waiters.set(key, r))
+const release = (key: string) => {
+	const r = waiters.get(key)
+	waiters.delete(key)
+	r?.()
+	return !!r
+}
+
+type Stream = { frames: string[]; done: boolean; wake: Set<() => void> }
+const streams = new Map<string, Stream>()
+function push(st: Stream, event: string, data: Record<string, unknown>) {
+	const n = st.frames.length
+	st.frames.push(`id: ${n}\nevent: ${event}\ndata: ${JSON.stringify(data)}\n\n`)
+	for (const w of st.wake) w()
+}
+function serve(st: Stream, after: number, dropAt?: number) {
+	let i = after + 1
+	let wake: () => void
+	return new Response(
+		new ReadableStream({
+			async pull(c) {
+				while (i >= st.frames.length && !st.done) await new Promise<void>((r) => st.wake.add((wake = r)))
+				st.wake.delete(wake)
+				if (i >= st.frames.length) return c.close()
+				if (dropAt !== undefined && i === dropAt) {
+					console.log('dropping the stream at frame', i)
+					return c.error(new Error('dropped'))
+				}
+				c.enqueue(enc.encode(st.frames[i++]!))
+			},
+		}),
+		{ headers: { 'content-type': 'text/event-stream' } },
+	)
+}
+
+// Bot watches: per bot, the viewers and the turn running now.
+type Turn = { generation: number; prompts: Record<string, unknown>[] }
+type Watcher = { send: (event: string, data: unknown) => void; close: () => void }
+const watchers: Record<string, Set<Watcher>> = {}
+const running: Record<string, Turn | undefined> = {}
+let generation = 10
+const emit = (bot: string, event: string, payload: Record<string, unknown>, gen: number) => {
+	for (const w of watchers[bot] ?? []) w.send(event, { payload, generation: gen })
+}
+
+function save(id: string, ...ms: Msg[]) {
+	transcriptOf(id).push(...ms)
+	const s = chats.find((c) => c.id === id) ?? Object.values(botChats).find((c) => c.id === id)
+	if (s) s.last_active = Math.floor(Date.now() / 1000)
+}
+
+async function botTurn(bot: string, text: string, fromHere: boolean) {
+	const id = `bot-${bot}`
+	const gen = ++generation
+	const turn: Turn = { generation: gen, prompts: [] }
+	running[bot] = turn
+	activeRuns[id] = `run-${gen}`
+	activeRunIds.add(`run-${gen}`)
+	if (!fromHere) save(id, user(Math.floor(Date.now() / 1000), text))
+	emit(bot, 'message.start', {}, gen)
+	await sleep(600)
+	emit(bot, 'reasoning.delta', { text: 'Checking what is asked. ' }, gen)
+	await sleep(600)
+	const callId = `call_${nextId}`
+	emit(bot, 'tool.start', { tool_id: callId, name: 'terminal', context: 'uptime', args: { command: 'uptime' } }, gen)
+	save(id, {
+		id: nextId++,
+		role: 'assistant',
+		content: '',
+		timestamp: Math.floor(Date.now() / 1000),
+		tool_calls: [{ id: callId, type: 'function', function: { name: 'terminal', arguments: '{"command":"uptime"}' } }],
+	})
+	await sleep(1200)
+	emit(bot, 'tool.complete', { tool_id: callId, result_text: 'up 12 days' }, gen)
+	save(id, { id: nextId++, role: 'tool', content: 'up 12 days', tool_call_id: callId, tool_name: 'terminal' })
+	if (/approve/i.test(text)) {
+		const prompt = {
+			kind: 'approval',
+			prompt_id: `p-${gen}`,
+			command: 'systemctl restart nginx',
+			description: 'Restart the web server',
+			execution_generation: gen,
+		}
+		turn.prompts.push(prompt)
+		emit(bot, 'approval.request', prompt, gen)
+		await waitFor(`p-${gen}`)
+		turn.prompts = []
+		await sleep(400)
+	}
+	const reply = `Done with "${text.slice(0, 40)}". The machine has been up for 12 days.`
+	for (const word of reply.split(/(?<= )/)) {
+		emit(bot, 'message.delta', { text: word }, gen)
+		await sleep(60)
+	}
+	save(id, say(Math.floor(Date.now() / 1000), reply))
+	emit(bot, 'message.complete', { status: 'complete' }, gen)
+	running[bot] = undefined
+	delete activeRuns[id]
+	activeRunIds.delete(`run-${gen}`)
+	return reply
+}
+
+async function plainRun(id: string, text: string, st: Stream, runId: string) {
+	activeRuns[id] = runId
+	activeRunIds.add(runId)
+	push(st, 'run.started', { run_id: runId, session_id: id })
+	await sleep(400)
+	push(st, 'hermes.status', { text: 'Thinking' })
+	for (const w of 'Let me check that. '.split(/(?<= )/)) {
+		push(st, 'assistant.delta', { delta: w })
+		await sleep(80)
+	}
+	const callId = `call_${nextId}`
+	push(st, 'tool.started', { tool_name: 'terminal', preview: 'df -h', args: { command: 'df -h /srv' } })
+	save(id, {
+		id: nextId++,
+		role: 'assistant',
+		content: 'Let me check that.',
+		timestamp: Math.floor(Date.now() / 1000),
+		tool_calls: [
+			{ id: callId, type: 'function', function: { name: 'terminal', arguments: '{"command":"df -h /srv"}' } },
+		],
+	})
+	await sleep(1000)
+	push(st, 'tool.completed', { tool_name: 'terminal' })
+	save(id, {
+		id: nextId++,
+		role: 'tool',
+		content: '/dev/sda1 1.8T 1.5T 300G 84% /srv',
+		tool_call_id: callId,
+		tool_name: 'terminal',
+	})
+	if (/approve/i.test(text)) {
+		push(st, 'approval.request', {
+			run_id: runId,
+			request_id: `${runId}-a`,
+			command: 'rm -rf /srv/tmp/*',
+			description: 'Delete temporary files',
+		})
+		await waitFor(`${runId}-a`)
+	}
+	const reply = `/srv is at 84%, with 300 GB free. (${text.slice(0, 30)})`
+	for (const w of reply.split(/(?<= )/)) {
+		push(st, 'assistant.delta', { delta: w })
+		await sleep(90)
+	}
+	save(id, say(Math.floor(Date.now() / 1000), reply))
+	push(st, 'assistant.completed', { content: reply })
+	push(st, 'run.completed', { usage: { input_tokens: 1200, output_tokens: 80 } })
+	st.done = true
+	for (const w of st.wake) w()
+	delete activeRuns[id]
+	activeRunIds.delete(runId)
+}
+
+let runs = 0
+async function scenario(req: Request, url: URL, p: string): Promise<Response | undefined> {
+	let m = /^gw(?:\/p\/[^/]+)?\/api\/sessions\/([^/]+)\/chat\/stream$/.exec(p)
+	if (m && req.method === 'POST') {
+		const id = decodeURIComponent(m[1]!)
+		const body: any = await req.json()
+		const text = typeof body.message === 'string' ? body.message : (body.message?.[0]?.text ?? '')
+		save(id, user(Math.floor(Date.now() / 1000), text))
+		const key = `stream-${++runs}`
+		const st: Stream = { frames: [], done: false, wake: new Set() }
+		streams.set(key, st)
+		const runId = `run-${runs}`
+		const bot = id.startsWith('bot-') ? id.slice(4) : null
+		if (bot) {
+			// A Bot Chat's stream reports nothing until the reply is done; the watch carries the turn.
+			push(st, 'run.started', { run_id: runId, session_id: id })
+			void botTurn(bot, text, true).then((reply) => {
+				push(st, 'assistant.completed', { content: reply })
+				push(st, 'run.completed', { usage: { input_tokens: 900, output_tokens: 40 } })
+				st.done = true
+				for (const w of st.wake) w()
+			})
+		} else void plainRun(id, text, st, runId)
+		const res = serve(st, -1, /drop/i.test(text) ? 6 : undefined)
+		res.headers.set('X-Caduceus-Stream', key)
+		return res
+	}
+	m = /^runs\/streams\/([^/]+)$/.exec(p)
+	if (m) {
+		const st = streams.get(decodeURIComponent(m[1]!))
+		if (!st) return json({ error: 'gone' }, 404)
+		console.log('rejoin', m[1], 'after', url.searchParams.get('after'))
+		return serve(st, Number(url.searchParams.get('after') ?? -1))
+	}
+	m = /^gw(?:\/p\/[^/]+)?\/v1\/runs\/([^/]+)\/approval$/.exec(p)
+	if (m && req.method === 'POST') {
+		const body: any = await req.json()
+		console.log('approval via run', m[1], body)
+		if (m[1] === 'run-scout') scoutApproved = true
+		return release(body.request_id) || m[1] === 'run-scout'
+			? json({ ok: true })
+			: json({ error: { message: 'Not pending', code: 'approval_not_pending' } }, 409)
+	}
+	m = /^bots\/([^/]+)\/approval$/.exec(p)
+	if (m && req.method === 'POST') {
+		const body: any = await req.json()
+		console.log('approval via socket', m[1], body)
+		return release(body.prompt)
+			? json({ ok: true })
+			: json({ error: { message: 'Not pending', code: 'approval_not_pending' } }, 409)
+	}
+	m = /^bots\/([^/]+)\/watch$/.exec(p)
+	if (m) {
+		const bot = decodeURIComponent(m[1]!)
+		const turn = running[bot]
+		let me: Watcher
+		return new Response(
+			new ReadableStream({
+				start(c) {
+					me = {
+						send: (event, data) => c.enqueue(enc.encode(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`)),
+						close: () => {
+							watchers[bot]?.delete(me)
+							c.close()
+						},
+					}
+					me.send('ready', {
+						session: `hs-${bot}`,
+						running: !!turn,
+						generation: turn?.generation ?? null,
+						prompts: turn?.prompts ?? [],
+					})
+					;(watchers[bot] ??= new Set()).add(me)
+					console.log('watch attached', bot, turn ? `running ${turn.generation}` : 'idle')
+				},
+				cancel() {
+					watchers[bot]?.delete(me)
+					console.log('watch closed', bot)
+				},
+			}),
+			{ headers: { 'content-type': 'text/event-stream' } },
+		)
+	}
+	if (p === 'mock/elsewhere' && req.method === 'POST') {
+		const bot = url.searchParams.get('bot') ?? 'ops'
+		void botTurn(bot, url.searchParams.get('text') ?? 'From my phone: please approve the restart', false)
+		return json({ started: bot })
+	}
+	if (p === 'mock/drop-watches' && req.method === 'POST') {
+		// The relay lost Hermes' socket: every watch ends.
+		for (const set of Object.values(watchers)) for (const w of [...set]) w.close()
+		return json({ ok: true })
+	}
+	return undefined
+}
