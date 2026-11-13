@@ -14,6 +14,7 @@ import { setSessionProfile } from '@/lib/gateway'
 import { dateTime } from '@/lib/time'
 import { useTitle } from '@/lib/title'
 import SessionSidebar from '@/components/chat/SessionSidebar.vue'
+import ResizableSidebar from '@/components/ResizableSidebar.vue'
 import BotBento from '@/components/chat/BotBento.vue'
 import AgentTurnView from '@/components/chat/AgentTurnView.vue'
 import Composer from '@/components/chat/Composer.vue'
@@ -362,10 +363,10 @@ async function connectThisBot() {
 
 <template>
 	<div class="flex h-full">
-		<div class="hidden md:block">
+		<ResizableSidebar>
 			<BotSidebar v-if="botName && !fromChats" :active="botName" />
 			<SessionSidebar v-else :active-id="botName ? undefined : id" :active-bot="botName" />
-		</div>
+		</ResizableSidebar>
 		<Transition name="drawer">
 			<div v-if="drawer" class="fixed inset-0 z-40 md:hidden">
 				<div class="absolute inset-0 bg-black/40" @click="drawer = false" />

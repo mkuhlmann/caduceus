@@ -4,6 +4,7 @@ import { useRoute } from 'vue-router'
 import { CornerDownRight, PanelLeft, Settings2, Square, X } from 'lucide-vue-next'
 import BotSidebar from '@/components/bots/BotSidebar.vue'
 import SessionSidebar from '@/components/chat/SessionSidebar.vue'
+import ResizableSidebar from '@/components/ResizableSidebar.vue'
 import BotAvatar from '@/components/bots/BotAvatar.vue'
 import RoomAvatar from '@/components/bots/RoomAvatar.vue'
 import RoomSettingsModal from '@/components/bots/RoomSettingsModal.vue'
@@ -357,10 +358,10 @@ const subtitle = computed(() => {
 
 <template>
 	<div class="flex h-full">
-		<div class="hidden md:block">
+		<ResizableSidebar>
 			<SessionSidebar v-if="fromChats" :active-room="roomId" />
 			<BotSidebar v-else :active-room="roomId" />
-		</div>
+		</ResizableSidebar>
 		<Transition name="drawer">
 			<div v-if="drawer" class="fixed inset-0 z-40 md:hidden">
 				<div class="absolute inset-0 bg-black/40" @click="drawer = false" />

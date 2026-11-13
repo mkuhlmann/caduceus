@@ -29,7 +29,7 @@ const buckets = computed(() => {
 </script>
 
 <template>
-	<aside class="flex h-full w-full flex-col bg-surface md:w-72 md:border-r md:border-line">
+	<aside class="flex h-full w-full flex-col bg-surface md:border-r md:border-line">
 		<div class="flex h-14 shrink-0 items-center justify-between gap-2 px-4">
 			<RouterLink to="/bots" class="font-semibold hover:text-ink-2" @click="emit('navigate')">Bots</RouterLink>
 			<RouterLink to="/bots?new=1" class="icon-btn" aria-label="New bot" @click="emit('navigate')">

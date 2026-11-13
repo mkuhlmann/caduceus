@@ -70,7 +70,7 @@ function newChat() {
 </script>
 
 <template>
-	<aside class="flex h-full w-full flex-col bg-surface md:w-72 md:border-r md:border-line">
+	<aside class="flex h-full w-full flex-col bg-surface md:border-r md:border-line">
 		<div class="flex items-center gap-2 px-3 pt-4 pb-2">
 			<button class="btn-primary flex-1 justify-start" @click="newChat"><Plus :size="16" /> New chat</button>
 		</div>
@@ -96,7 +96,7 @@ function newChat() {
 				<ul>
 					<li v-for="s in g.items" :key="s.id" class="group relative">
 						<button
-							class="flex w-full flex-col rounded-md px-2 py-1.5 text-left transition-colors"
+							class="flex w-full cursor-pointer flex-col rounded-md px-2 py-1.5 text-left transition-colors"
 							:class="s.id === props.activeId ? 'bg-surface-2' : 'hover:bg-surface-2/60'"
 							:aria-current="s.id === props.activeId ? 'true' : undefined"
 							@click="open(s.id)"
