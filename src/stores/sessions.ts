@@ -35,7 +35,7 @@ import { forgetTranscript, readTranscript, saveTranscript } from '@/lib/transcri
 import { fetchOlder, fetchTail, LIVE_TAIL, mergeTail, prependOlder, TAIL, type Tail } from '@/lib/transcript-pages'
 import { onRpcEvent } from '@/lib/rpc'
 import { onResync } from '@/lib/live'
-import { watchBotChat, type BotWatch, type WatchEvent } from '@/lib/bot-watch'
+import { watchBotChat, type BotChatWatch, type WatchEvent } from '@/lib/bot-watch'
 import { post } from '@/lib/http'
 import { TurnWriter } from '@/lib/turn-writer'
 import { counters, RunClock, savedStats, saveStats, turnStats, turnTokens, type RunStats } from '@/lib/run-stats'
@@ -560,8 +560,8 @@ export const useSessions = defineStore('sessions', () => {
 		// Where Hermes lets a socket view the chat, the turn streams from there (`onWatch` below). Otherwise it is
 		// filled in from the steps Hermes saves as it goes, until the stream says more.
 		const profile = sessionProfile(id) ?? 'default'
-		let ownWatch: BotWatch | null = null
-		let watchSession = ''
+		let watch: BotChatWatch | null = null
+		let ownWatch: BotChatWatch | null = null
 		let streamed = false
 		let savedTimer: ReturnType<typeof setTimeout> | undefined
 		let after = l.after
@@ -584,7 +584,7 @@ export const useSessions = defineStore('sessions', () => {
 		const onWatch = (ev: WatchEvent) => {
 			if (live[id] !== l) return
 			streamed = true
-			const o = writer.apply(ev, { profile, session: watchSession })
+			const o = writer.apply(ev, { profile, session: watch?.session ?? '' })
 			if (o.status) l.status = o.status
 			if (o.gap) {
 				// The view fell behind and Hermes dropped it: read the saved steps instead.
@@ -592,19 +592,11 @@ export const useSessions = defineStore('sessions', () => {
 				savedTimer = setTimeout(watchSaved, SAVED_MS)
 			}
 		}
-		const shared = botViews[id]
-		if (shared) {
-			// The open chat is watched already. A turn running as this is sent (another bot's message, a routine) is
-			// not this one: this message waits behind it, and that turn keeps its own place.
-			watchSession = shared.watch.session
-			shared.route = { skip: botTurns[id]?.generation ?? null, handle: onWatch }
-		} else if (isBotChat(id)) {
-			let skip: number | null = null
-			ownWatch = await watchBotChat(profile, id, (ev) => (skip === null || ev.generation !== skip) && onWatch(ev))
-			if (ownWatch?.running) skip = ownWatch.generation
-			watchSession = ownWatch?.session ?? ''
-			if (!ownWatch) savedTimer = setTimeout(watchSaved, SAVED_MS)
-		}
+		// The open chat is watched already, else it is watched for this turn. A turn running as this is sent (another
+		// bot's message, a routine) is not this one: this message waits behind it, and that turn keeps its own place.
+		watch = botViews[id] ?? (isBotChat(id) ? (ownWatch = await watchBotChat(profile, id)) : null)
+		const release = watch?.claim(onWatch)
+		if (!watch && isBotChat(id)) savedTimer = setTimeout(watchSaved, SAVED_MS)
 
 		// The relay keeps the turn's stream. When the connection drops (the phone slept, the network changed), the turn
 		// picks it up again where it broke off once the device is back.
@@ -660,13 +652,9 @@ export const useSessions = defineStore('sessions', () => {
 			writer.flush()
 			clearTimeout(savedTimer)
 			clearTimeout(clarifyTimer)
+			// Lost, the turn goes on without this tab's stream: its later events show as a turn started elsewhere.
+			release?.(lost)
 			ownWatch?.close()
-			const view = botViews[id]
-			if (view?.route?.handle === onWatch) {
-				// Late events of this turn are not a new one, unless the stream was lost and the turn goes on without it.
-				if (view.route.gen !== undefined && !lost) view.done.add(view.route.gen)
-				view.route = undefined
-			}
 			const timing = clock?.finish()
 			// Read off saved steps, the turn has no timing of its own to split into reading and writing.
 			if (timing && !streamed) timing.promptMs = timing.genMs = timing.toolMs = undefined
@@ -690,23 +678,16 @@ export const useSessions = defineStore('sessions', () => {
 	/**
 	 * The open Bot Chat stays watched on the Hermes socket (where the connection can view one), so a turn that did
 	 * not start here shows live too: another bot's message, a routine, a turn already running when the page loaded.
-	 * A turn sent from here takes the events of its own run through `route`.
+	 * A turn sent from here claims its own events from the watch.
 	 */
-	type BotView = {
-		watch: BotWatch
-		route?: { skip: number | null; handle: (ev: WatchEvent) => void; gen?: number }
-		/** Turns that ended: their late events start nothing. */
-		done: Set<number>
-	}
 	type BotTurn = {
 		turn: AgentTurn
 		writer: TurnWriter
-		generation: number | null
 		/** The newest message saved before the turn's own: the transcript shows up to it while the turn runs. */
 		after?: number
 		status?: string
 	}
-	const botViews: Record<string, BotView> = {}
+	const botViews: Record<string, BotChatWatch> = {}
 	const botTurns = reactive<Record<string, BotTurn>>({})
 
 	function isBotChat(id: string) {
@@ -716,65 +697,43 @@ export const useSessions = defineStore('sessions', () => {
 	async function watchBot(id: string) {
 		if (botViews[id] || !isBotChat(id) || useApp().liveBots === false) return
 		const profile = sessionProfile(id) ?? 'default'
-		let view: BotView | undefined
-		const w = await watchBotChat(
-			profile,
-			id,
-			(ev) => view && onBotEvent(id, view, ev),
-			() => {
-				// The relay lost Hermes' socket: attach again while the chat is open.
-				if (!view || botViews[id] !== view) return
-				delete botViews[id]
-				void finishBotTurn(id)
-				setTimeout(() => followed === id && watchBot(id), 2000)
+		let mine: BotTurn | undefined
+		const w = await watchBotChat(profile, id, {
+			reattach: true,
+			onTurn: (_generation, midway, session) => {
+				// Running as the chat opened while this tab sends one: that is the turn shown.
+				if (midway && live[id]) return undefined
+				const bt = (mine = startBotTurn(id, midway))
+				return {
+					event(ev) {
+						if (botTurns[id] !== bt) return
+						const o = bt.writer.apply(ev, { profile, session })
+						if (o.status) bt.status = o.status
+					},
+					end: () => void finishBotTurn(id, bt),
+				}
 			},
-		)
+		})
 		if (!w) return
-		if (followed !== id || botViews[id]) return w.close()
-		view = { watch: w, done: new Set() }
-		botViews[id] = view
-		if (w.running && !live[id]) {
-			startBotTurn(id, w.generation, true)
-			// Asked before the watch began: they are still waiting for an answer.
-			for (const p of w.prompts)
-				if (p.kind === 'approval' || p.kind === 'clarify')
-					onBotEvent(id, view, {
-						type: `${p.kind}.request`,
-						payload: p,
-						generation: typeof p.execution_generation === 'number' ? p.execution_generation : w.generation,
-					})
+		if (followed !== id || botViews[id]) {
+			w.close()
+			if (mine && botTurns[id] === mine) delete botTurns[id]
+			return
 		}
+		botViews[id] = w
 	}
 
 	function unwatchBot(id: string) {
-		const view = botViews[id]
-		if (!view) return
+		const w = botViews[id]
+		if (!w) return
 		delete botViews[id]
-		view.watch.close()
+		w.close()
 		delete botTurns[id]
 	}
 
-	function onBotEvent(id: string, view: BotView, ev: WatchEvent) {
-		if (botViews[id] !== view) return
-		const r = view.route
-		if (r && (r.skip === null || ev.generation !== r.skip)) {
-			if (ev.generation !== null) r.gen = ev.generation
-			return r.handle(ev)
-		}
-		if (ev.generation !== null && view.done.has(ev.generation)) return
-		let bt = botTurns[id]
-		if (!bt || (ev.generation !== null && bt.generation !== null && ev.generation !== bt.generation)) {
-			if (bt) void finishBotTurn(id)
-			bt = startBotTurn(id, ev.generation, false)
-		}
-		const o = bt.writer.apply(ev, { profile: sessionProfile(id) ?? 'default', session: view.watch.session })
-		if (o.status) bt.status = o.status
-		if (o.complete || o.gap) void finishBotTurn(id)
-	}
-
-	function startBotTurn(id: string, generation: number | null, midway: boolean): BotTurn {
+	function startBotTurn(id: string, midway: boolean): BotTurn {
 		const turn = reactive<AgentTurn>({ kind: 'agent', key: 'remote-agent', steps: [], reasoning: '', live: true })
-		const bt = reactive({ turn, writer: new TurnWriter(turn), generation }) as BotTurn
+		const bt = reactive({ turn, writer: new TurnWriter(turn) }) as BotTurn
 		botTurns[id] = bt
 		// Bring the chat up to the turn's start: the message that began it is saved by now. A turn joined midway has
 		// saved its first steps too; those are shown from the copy, and the transcript stops before them.
@@ -820,13 +779,11 @@ export const useSessions = defineStore('sessions', () => {
 		lastError.value = rest
 	}
 
-	async function finishBotTurn(id: string) {
-		const bt = botTurns[id]
-		if (!bt) return
+	async function finishBotTurn(id: string, bt: BotTurn) {
+		if (botTurns[id] !== bt) return
 		// A turn that ran to its end here: an error from an earlier one is old news.
 		if (!bt.turn.error) clearError(id)
 		bt.writer.flush()
-		if (bt.generation !== null) botViews[id]?.done.add(bt.generation)
 		// The turn stays on screen until the transcript that replaces it is here.
 		await loadMessages(id, { quiet: true })
 		if (botTurns[id] === bt) delete botTurns[id]
