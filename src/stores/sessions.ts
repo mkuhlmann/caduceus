@@ -14,6 +14,7 @@ import {
 } from '@/lib/gateway'
 import {
 	APPROVAL_CHOICES,
+	prettyToolName,
 	type AgentTurn,
 	type ApprovalStep,
 	type ClarifyStep,
@@ -39,6 +40,7 @@ import { watchBotChat, type BotChatWatch, type WatchEvent } from '@/lib/bot-watc
 import { post } from '@/lib/http'
 import { TurnWriter } from '@/lib/turn-writer'
 import { counters, RunClock, savedStats, saveStats, turnStats, turnTokens, type RunStats } from '@/lib/run-stats'
+import type { BotState } from '@/lib/avatar'
 import { useApp } from './app'
 import { usePreferences } from './preferences'
 
@@ -52,6 +54,25 @@ type Live = {
 	/** The newest message held when it was sent. Saved ones after it are this turn's, shown live instead. */
 	after?: number
 }
+
+/**
+ * The run going on in a chat, however it is known here: sent from this tab, watched on the Hermes socket (a turn
+ * of a Bot Chat started elsewhere), or followed through the transcript while it runs in another tab, device or
+ * channel.
+ */
+export type Run = {
+	origin: 'here' | 'watched' | 'elsewhere'
+	/** The running turn as it shows. */
+	turn: AgentTurn
+	status?: string
+	/** What it waits for from you: a decision on an approval, or an answer to a question. */
+	waitingOn?: 'approval' | 'answer'
+	/** It can be stopped and steered from here. */
+	controllable: boolean
+}
+
+/** What a bot's face shows for a chat, and its hover text. */
+export type Face = { state: BotState; hint?: string }
 
 /** A run of the open session that this tab did not start: another tab, device or channel. */
 type Remote = { runId?: string; approval?: ApprovalRequest; clarify?: ClarifyPrompt[] }
@@ -487,13 +508,50 @@ export const useSessions = defineStore('sessions', () => {
 		return { kind: 'followed', waiting }
 	}
 
-	/** What the run in this chat waits for from you: a decision on an approval, or an answer to a question. */
-	function waitingOn(id: string): 'approval' | 'answer' | undefined {
+	/** The run going on in this chat, if any. */
+	function runOf(id: string): Run | undefined {
 		const tail = tailOf(id)
 		if (!tail) return undefined
-		const steps = tail.kind === 'followed' ? tail.waiting : tail.turn.steps
-		if (steps.some((s) => s.kind === 'approval' && !s.resolved)) return 'approval'
-		if (steps.some((s) => s.kind === 'clarify' && s.answer === undefined)) return 'answer'
+		const l = live[id]
+		const r = remote[id]
+		const turn = tail.kind === 'followed' ? (liveTurns(messages[id] ?? [], tail).at(-1) as AgentTurn) : tail.turn
+		const steps = turn.steps
+		return {
+			origin: tail.kind === 'sent' ? 'here' : tail.kind === 'watched' ? 'watched' : 'elsewhere',
+			turn,
+			status: l ? l.status : (botTurns[id]?.status ?? (r && !r.runId ? 'Working in another channel' : undefined)),
+			waitingOn: steps.some((s) => s.kind === 'approval' && !s.resolved)
+				? 'approval'
+				: steps.some((s) => s.kind === 'clarify' && s.answer === undefined)
+					? 'answer'
+					: undefined,
+			controllable: !!l || !!r?.runId,
+		}
+	}
+
+	/** A run goes on in this chat: from here, or anywhere through this server. */
+	function isRunning(id: string) {
+		return !!live[id] || !!activeRuns.value[id]
+	}
+
+	/** What the face of the bot a chat belongs to shows: what its run is doing, or how the last one ended. */
+	function faceOf(id: string): Face {
+		const run = runOf(id)
+		if (run?.waitingOn === 'approval') return { state: 'waiting', hint: 'Waiting for your approval' }
+		if (run?.waitingOn === 'answer') return { state: 'asking', hint: 'Waiting for your answer' }
+		if (run && run.origin !== 'elsewhere') {
+			const last = run.turn.steps.at(-1)
+			if (last?.kind === 'tool' && last.status === 'running')
+				return { state: 'working', hint: `Running ${prettyToolName(last.name)}` }
+			if (last?.kind === 'text') return { state: 'working', hint: 'Writing a reply' }
+			// Thinking only while reasoning streams in: a Bot Chat's queued turn reports no steps until it ends.
+			if (!last && run.turn.reasoning) return { state: 'thinking', hint: run.status ?? 'Thinking' }
+			return { state: 'working', hint: run.status ?? 'Working' }
+		}
+		if (run || activeRuns.value[id]) return { state: 'working' }
+		const err = lastError.value[id]
+		if (err) return { state: 'blocked', hint: err }
+		return { state: 'idle' }
 	}
 
 	async function create(opts: { projectId?: string; instructions?: string } = {}) {
@@ -1066,11 +1124,10 @@ export const useSessions = defineStore('sessions', () => {
 		hasOlder,
 		isLoadingOlder,
 		loadOlder,
-		live,
-		botTurns,
 		lastError,
-		remote,
-		activeRuns,
+		runOf,
+		isRunning,
+		faceOf,
 		follow,
 		loadList,
 		loadMessages,
@@ -1082,7 +1139,6 @@ export const useSessions = defineStore('sessions', () => {
 		stop,
 		answerApproval,
 		answerClarify,
-		waitingOn,
 		rename,
 		togglePin,
 		archive,

@@ -129,7 +129,7 @@ async function removeProject() {
 					>
 						<span class="flex items-center gap-2">
 							<span
-								v-if="sessions.live[r.id]"
+								v-if="sessions.isRunning(r.id)"
 								class="size-2 shrink-0 animate-pulse rounded-full bg-gold"
 								title="Working"
 							/>

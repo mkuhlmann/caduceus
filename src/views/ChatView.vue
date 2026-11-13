@@ -46,6 +46,9 @@ const fromChats = computed(() => route.name === 'chat-bot')
 const botBase = computed(() => (fromChats.value ? '/chat/bot' : '/bots'))
 const bot = computed(() => (botName.value ? bots.byName(botName.value) : undefined))
 const botState = computed(() => (botName.value ? bots.stateOf(botName.value) : { state: 'idle' as const }))
+// The face beside the replies: the open chat's own run, which is not the Bot Chat's when another of the bot's
+// conversations is shown in its place.
+const replyFace = computed(() => (botSession.value && id.value ? sessions.faceOf(id.value) : botState.value))
 const editingBot = ref(false)
 // The routines pane docks beside a bot's chat; it stays open across bots until closed.
 const routinesOpen = ref(localStorage.getItem('caduceus.routinesOpen') === '1')
@@ -78,16 +81,11 @@ const loadingOlder = computed(() => !!id.value && sessions.isLoadingOlder(id.val
 watch([id, () => turns.value.length], ([v, n], [was, before]) => {
 	if (v === was && before && n > before) limit.value += n - before
 })
-const live = computed(() => (id.value ? sessions.live[id.value] : undefined))
-const remote = computed(() => (id.value && !live.value ? sessions.remote[id.value] : undefined))
+const run = computed(() => (id.value ? sessions.runOf(id.value) : undefined))
+const sending = computed(() => run.value?.origin === 'here')
 // A run in another tab or device can be stopped and steered from here; one in another channel only watched.
-const running = computed(() => !!live.value || !!remote.value?.runId)
-const liveStatus = computed(
-	() =>
-		live.value?.status ??
-		(id.value ? sessions.botTurns[id.value]?.status : undefined) ??
-		(remote.value && !remote.value.runId ? 'Working in another channel' : undefined),
-)
+const running = computed(() => !!run.value?.controllable)
+const liveStatus = computed(() => run.value?.status)
 // Turn-shaped placeholders only while a chat that is not in memory yet loads.
 const skeleton = computed(() => !!id.value && !turns.value.length && sessions.isLoading(id.value))
 // Fade the conversation in when it replaces the placeholder; a chat that is already in memory just appears.
@@ -95,7 +93,7 @@ const fadeIn = ref(false)
 watch(skeleton, (v) => v && (fadeIn.value = true))
 const lastError = computed(() => (id.value ? sessions.lastError[id.value] : undefined))
 // A chat painted from memory or disk while its fresh copy loads, and one whose fresh copy did not come.
-const refreshing = computed(() => !!id.value && !live.value && sessions.isRefreshing(id.value))
+const refreshing = computed(() => !!id.value && !sending.value && sessions.isRefreshing(id.value))
 const refreshError = computed(() => (id.value && !refreshing.value ? sessions.refreshError[id.value] : undefined))
 function retryRefresh() {
 	if (id.value) void sessions.loadMessages(id.value, { open: true })
@@ -137,7 +135,7 @@ watch(
 		stickToBottom = true
 		scrollDown(true)
 		nextTick(() => composer.value?.autoFocus())
-		if (v && !sessions.live[v]) await sessions.loadMessages(v, { open: true })
+		if (v && sessions.runOf(v)?.origin !== 'here') await sessions.loadMessages(v, { open: true })
 		if (v !== id.value) return
 		sessions.follow(v)
 		scrollDown()
@@ -318,7 +316,7 @@ const intro = computed(
 		'Hermes can run commands, browse, write files and use its skills on the machine it lives on. You can watch each step and approve risky ones.',
 )
 // The tab names the bot or the chat, and says so when a run waits for an approval, so it shows from another tab.
-const needsApproval = computed(() => !!id.value && sessions.waitingOn(id.value) === 'approval')
+const needsApproval = computed(() => run.value?.waitingOn === 'approval')
 useTitle(() => {
 	const name = bot.value
 		? bot.value.displayName
@@ -613,8 +611,8 @@ async function connectThisBot() {
 											:seed="bot.name"
 											:look="bot.look"
 											:image="bot.image"
-											:state="t.key === lastAgentKey ? botState.state : 'idle'"
-											:hint="t.key === lastAgentKey ? botState.hint : undefined"
+											:state="t.key === lastAgentKey ? replyFace.state : 'idle'"
+											:hint="t.key === lastAgentKey ? replyFace.hint : undefined"
 											:alt="bot.displayName"
 											:size="28"
 											:still="t.key !== lastAgentKey"
@@ -625,7 +623,7 @@ async function connectThisBot() {
 									class="min-w-0 flex-1"
 									bot
 									:turn="t"
-									:status="t.live ? (liveStatus ?? botState.hint) : undefined"
+									:status="t.live ? (liveStatus ?? replyFace.hint) : undefined"
 									:tint="liveTint"
 									:stats="statsOf(t.key)"
 									@approve="(step, c) => id && sessions.answerApproval(id, step, c)"
@@ -642,7 +640,7 @@ async function connectThisBot() {
 							/>
 						</template>
 					</div>
-					<p v-if="lastError && !live" class="mt-3 max-w-[72ch] rounded-md bg-rose-soft px-3 py-2 text-sm">
+					<p v-if="lastError && !sending" class="mt-3 max-w-[72ch] rounded-md bg-rose-soft px-3 py-2 text-sm">
 						{{ lastError }}
 					</p>
 				</div>
@@ -650,7 +648,7 @@ async function connectThisBot() {
 
 			<div class="mx-auto w-full max-w-4xl px-3 pb-3 md:px-8 md:pb-5">
 				<div
-					v-if="foreign && !live && !remote"
+					v-if="foreign && !run"
 					class="mb-2 flex flex-wrap items-center justify-between gap-2 rounded-lg bg-surface-2 px-3 py-2 text-sm text-ink-2"
 				>
 					<span

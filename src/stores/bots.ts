@@ -3,7 +3,6 @@ import { computed, reactive, ref, watch } from 'vue'
 import { dashboard, type Profile } from '@/lib/dashboard'
 import { BOT_CHAT_TITLE, gateway, gwFor, setSessionProfile, type Session } from '@/lib/gateway'
 import { get, patch, post, del, qs } from '@/lib/http'
-import { prettyToolName } from '@/lib/turns'
 import { nearestColor, type BotLook, type BotState } from '@/lib/avatar'
 import { useSessions } from './sessions'
 import { onResync } from '@/lib/live'
@@ -363,26 +362,7 @@ export const useBots = defineStore('bots', () => {
 	// State, read off the bot's chat: what the face shows and the hover text says.
 	function rawState(name: string): { state: BotState; hint?: string } {
 		const id = chats[name]?.id
-		if (!id) return { state: 'idle' }
-		// A turn sent from here, or one started elsewhere that the open chat watches live.
-		const waiting = sessions.waitingOn(id)
-		if (waiting === 'approval') return { state: 'waiting', hint: 'Waiting for your approval' }
-		if (waiting === 'answer') return { state: 'asking', hint: 'Waiting for your answer' }
-		const l = sessions.live[id] ?? sessions.botTurns[id]
-		if (l) {
-			const last = l.turn.steps.at(-1)
-			if (last?.kind === 'tool' && last.status === 'running')
-				return { state: 'working', hint: `Running ${prettyToolName(last.name)}` }
-			if (last?.kind === 'text') return { state: 'working', hint: 'Writing a reply' }
-			// Thinking only while reasoning streams in: a Bot Chat's queued turn reports no steps until it ends.
-			if (!last && l.turn.reasoning) return { state: 'thinking', hint: l.status ?? 'Thinking' }
-			return { state: 'working', hint: l.status ?? 'Working' }
-		}
-		if (sessions.remote[id]) return { state: 'working' }
-		if (sessions.activeRuns[id]) return { state: 'working' }
-		const err = sessions.lastError[id]
-		if (err) return { state: 'blocked', hint: err }
-		return { state: 'idle' }
+		return id ? sessions.faceOf(id) : { state: 'idle' }
 	}
 
 	// Bots added, removed or changed elsewhere (another device, Hermes Desktop, the terminal): the relay notices and
