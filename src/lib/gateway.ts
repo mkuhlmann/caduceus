@@ -259,7 +259,7 @@ export const gateway = {
 			signal: opts.signal,
 		})
 		if (!res.ok) throw await toError(res)
-		for await (const frame of readSse(res, opts.signal)) {
+		for await (const frame of streamLost(readSse(res, opts.signal), opts.signal)) {
 			let d: any
 			try {
 				d = JSON.parse(frame.data)
@@ -312,6 +312,24 @@ export const gateway = {
 			}
 		}
 	},
+}
+
+/**
+ * The browser lost the stream mid-reply (the phone put the app to sleep, the network changed). Its own message for
+ * that ("Error in input stream", "network error", "Load failed") says nothing useful, and the run itself goes on: the
+ * relay keeps it running and Hermes saves it.
+ */
+export class StreamLost extends Error {
+	override name = 'StreamLost'
+}
+
+async function* streamLost<T>(frames: AsyncGenerator<T>, signal?: AbortSignal): AsyncGenerator<T> {
+	try {
+		yield* frames
+	} catch (e) {
+		if (signal?.aborted || (e as Error).name === 'AbortError') throw e
+		throw new StreamLost('The connection to Caduceus was interrupted.', { cause: e })
+	}
 }
 
 function enc(s: string) {

@@ -509,6 +509,7 @@ export const useSessions = defineStore('sessions', () => {
 		const before = clock ? gateway.session(id).then(counters, () => null) : null
 		let usage: { input_tokens?: number; output_tokens?: number } | undefined
 		const writer = new TurnWriter(turn, clock)
+		let lost = false
 
 		// The chat stream says the clarify tool started but not what it asks: the run's status holds the questions.
 		// It asks them one at a time, so the run is read until the tool is done.
@@ -656,7 +657,8 @@ export const useSessions = defineStore('sessions', () => {
 				}
 			}
 		} catch (e) {
-			if ((e as Error).name !== 'AbortError') {
+			if ((e as Error).name === 'StreamLost') lost = true
+			else if ((e as Error).name !== 'AbortError') {
 				const err = e as Error & { status?: number; code?: string }
 				turn.error =
 					err.status === 409 && err.code === 'permission_denied'
@@ -670,8 +672,8 @@ export const useSessions = defineStore('sessions', () => {
 			ownWatch?.close()
 			const view = botViews[id]
 			if (view?.route?.handle === onWatch) {
-				// Late events of this turn are not a new one.
-				if (view.route.gen !== undefined) view.done.add(view.route.gen)
+				// Late events of this turn are not a new one, unless the stream was lost and the turn goes on without it.
+				if (view.route.gen !== undefined && !lost) view.done.add(view.route.gen)
 				view.route = undefined
 			}
 			const timing = clock?.finish()
@@ -680,15 +682,14 @@ export const useSessions = defineStore('sessions', () => {
 			const failed = turn.error
 			// A load that started before the run ended would miss its last messages.
 			await inflight.get(id)
-			await loadMessages(id)
+			await loadMessages(id, { quiet: lost })
 			delete live[id]
 			if (failed) lastError.value = { ...lastError.value, [id]: failed }
-			else {
-				const { [id]: _, ...rest } = lastError.value
-				lastError.value = rest
-			}
+			else clearError(id)
+			// The run goes on without this tab's stream: follow it like one started elsewhere.
+			if (lost && followed === id) void poll(id, true)
 			await settle(id)
-			if (timing && usage && !failed) {
+			if (timing && usage && !failed && !lost) {
 				const last = turnsOf(messages[id] ?? []).at(-1)
 				if (last?.kind === 'agent')
 					recordStats(`${id}:${last.key}`, turnStats(timing, turnTokens(await before, counters(byId(id)), usage)))
@@ -835,9 +836,17 @@ export const useSessions = defineStore('sessions', () => {
 		}
 	}
 
+	function clearError(id: string) {
+		if (!(id in lastError.value)) return
+		const { [id]: _, ...rest } = lastError.value
+		lastError.value = rest
+	}
+
 	async function finishBotTurn(id: string) {
 		const bt = botTurns[id]
 		if (!bt) return
+		// A turn that ran to its end here: an error from an earlier one is old news.
+		if (!bt.turn.error) clearError(id)
 		bt.writer.flush()
 		if (bt.generation !== null) botViews[id]?.done.add(bt.generation)
 		// The turn stays on screen until the transcript that replaces it is here.
@@ -1018,6 +1027,7 @@ export const useSessions = defineStore('sessions', () => {
 				next = FOLLOW_MS
 			} else if (remote[id]) {
 				delete remote[id]
+				clearError(id)
 				await settle(id)
 			}
 		} finally {
