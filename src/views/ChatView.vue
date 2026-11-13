@@ -13,6 +13,7 @@ import { setSessionProfile } from '@/lib/gateway'
 import { dateTime } from '@/lib/time'
 import { useTitle } from '@/lib/title'
 import SessionSidebar from '@/components/chat/SessionSidebar.vue'
+import BotBento from '@/components/chat/BotBento.vue'
 import AgentTurnView from '@/components/chat/AgentTurnView.vue'
 import Composer from '@/components/chat/Composer.vue'
 import BotSidebar from '@/components/bots/BotSidebar.vue'
@@ -459,7 +460,9 @@ async function connectThisBot() {
 			</header>
 
 			<div ref="scroller" class="min-h-0 flex-1 overflow-y-auto" @scroll="onScroll">
-				<div v-if="!id" class="mx-auto flex h-full max-w-4xl flex-col justify-end px-4 pb-6 md:px-8">
+				<div v-if="!id" class="mx-auto flex min-h-full max-w-4xl flex-col justify-end px-4 pb-6 md:px-8">
+					<!-- On a phone the chat list hides in a drawer, so a new chat offers the bots in its empty top instead. -->
+					<BotBento v-if="!botName" class="-mx-1 mb-auto pt-3 pb-8 md:hidden" />
 					<template v-if="bot && !bot.connected">
 						<BotAvatar :seed="bot.name" :look="bot.look" :image="bot.image" :alt="bot.displayName" :size="64" />
 						<h2 class="display mt-4 mb-2 text-3xl">Connect {{ bot.displayName }}</h2>
