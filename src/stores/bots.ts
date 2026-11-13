@@ -366,6 +366,8 @@ export const useBots = defineStore('bots', () => {
 		const l = sessions.live[id] ?? sessions.botTurns[id]
 		if (l) {
 			if (('approval' in l && l.approval) || l.prompt) return { state: 'waiting', hint: 'Waiting for your approval' }
+			if (l.turn.steps.some((s) => s.kind === 'clarify' && s.answer === undefined))
+				return { state: 'asking', hint: 'Waiting for your answer' }
 			const last = l.turn.steps.at(-1)
 			if (last?.kind === 'tool' && last.status === 'running')
 				return { state: 'working', hint: `Running ${prettyToolName(last.name)}` }
@@ -375,7 +377,9 @@ export const useBots = defineStore('bots', () => {
 			return { state: 'working', hint: l.status ?? 'Working' }
 		}
 		const r = sessions.remote[id]
-		if (r) return r.approval ? { state: 'waiting', hint: 'Waiting for your approval' } : { state: 'working' }
+		if (r?.approval) return { state: 'waiting', hint: 'Waiting for your approval' }
+		if (r?.clarify?.length) return { state: 'asking', hint: 'Waiting for your answer' }
+		if (r) return { state: 'working' }
 		if (sessions.activeRuns[id]) return { state: 'working' }
 		const err = sessions.lastError[id]
 		if (err) return { state: 'blocked', hint: err }
@@ -388,7 +392,7 @@ export const useBots = defineStore('bots', () => {
 		Object.fromEntries(
 			bots.value.map((b) => {
 				const s = rawState(b.name).state
-				return [b.name, s === 'working' || s === 'thinking' || s === 'waiting']
+				return [b.name, s === 'working' || s === 'thinking' || s === 'waiting' || s === 'asking']
 			}),
 		),
 	)

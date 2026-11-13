@@ -16,8 +16,10 @@ import {
 /**
  * A bot's face: a solid body with two capsule eyes. The face carries the bot's state, so there is no separate
  * badge. Idle it blinks now and then; thinking it tilts, looks up and thought dots rise; working it glows, wobbles
- * like jelly and its narrowed eyes read side to side; waiting it hops with wide eyes; stuck it slumps, greys and
- * sweats; done it bounces once with happy eyes and a sparkle. The current action is in the hover text.
+ * like jelly and its narrowed eyes read side to side; waiting for an approval it hops with wide eyes and looks up
+ * as dots rise into an exclamation mark; asking it leans and looks up at a question mark that sways above it; stuck
+ * it slumps, greys and sweats; done it bounces once with happy eyes and a sparkle. The current action is in the
+ * hover text.
  */
 const props = withDefaults(
 	defineProps<{
@@ -130,6 +132,40 @@ const label = computed(() => {
 				d="M36 -45Q36 -36 45 -36Q36 -36 36 -27Q36 -36 27 -36Q36 -36 36 -45Z"
 			/>
 		</svg>
+		<svg
+			v-if="extras && (state === 'asking' || state === 'waiting')"
+			:viewBox="VIEWBOX"
+			class="pointer-events-none absolute inset-0 size-full overflow-visible"
+			aria-hidden="true"
+		>
+			<g
+				v-if="state === 'waiting'"
+				class="alert"
+				:fill="color"
+				stroke="var(--bg)"
+				stroke-width="3"
+				paint-order="stroke"
+			>
+				<circle cx="26" cy="-34" r="2.6" />
+				<circle cx="32" cy="-41" r="3.4" />
+				<text x="42" y="-38" font-size="38" font-weight="900" text-anchor="middle">!</text>
+			</g>
+			<text
+				v-else
+				class="ask"
+				x="36"
+				y="-24"
+				font-size="54"
+				font-weight="900"
+				text-anchor="middle"
+				:fill="color"
+				stroke="var(--bg)"
+				stroke-width="5"
+				paint-order="stroke"
+			>
+				?
+			</text>
+		</svg>
 	</span>
 </template>
 
@@ -208,6 +244,46 @@ const label = computed(() => {
 .is-waiting .whole,
 .is-waiting .photo {
 	animation: hop 1.7s ease-out infinite;
+}
+.is-waiting .gaze {
+	transform: translate(3px, -4px);
+}
+/* Two dots rise, then the exclamation mark pops in after them. */
+.alert > * {
+	transform-box: fill-box;
+	transform-origin: center;
+	opacity: 0;
+}
+.alert circle {
+	animation: rise-hold 2.4s ease-in-out infinite;
+}
+.alert circle:nth-child(2) {
+	animation-delay: 0.25s;
+}
+.alert text {
+	animation: pop-in 2.4s var(--ease-out) 0.5s infinite;
+}
+
+/* Asking you something: leans and looks up, one eye a little narrower, at a question mark that sways above. */
+.is-asking .whole {
+	transform: rotate(-8deg);
+}
+.is-asking .gaze {
+	transform: translate(4px, -6px);
+}
+.is-asking .lid {
+	transform: scale(1.15);
+}
+.is-asking .lid rect:first-child {
+	transform: scale(0.8);
+}
+.is-asking .photo {
+	animation: breathe 2.6s ease-in-out infinite;
+}
+.ask {
+	transform-box: fill-box;
+	transform-origin: 50% 100%;
+	animation: sway 2.6s ease-in-out infinite;
 }
 
 /* Stuck: slumps to one side, loses its colour, sweats. */
@@ -354,6 +430,44 @@ const label = computed(() => {
 	100% {
 		opacity: 0;
 		transform: translateY(-2px);
+	}
+}
+@keyframes rise-hold {
+	0% {
+		opacity: 0;
+		transform: translateY(4px);
+	}
+	20%,
+	80% {
+		opacity: 1;
+		transform: none;
+	}
+	100% {
+		opacity: 0;
+	}
+}
+@keyframes pop-in {
+	0% {
+		opacity: 0;
+		transform: scale(0.4) rotate(-20deg);
+	}
+	15%,
+	80% {
+		opacity: 1;
+		transform: scale(1) rotate(0deg);
+	}
+	100% {
+		opacity: 0;
+		transform: scale(0.9);
+	}
+}
+@keyframes sway {
+	0%,
+	100% {
+		transform: rotate(-10deg) translateY(0);
+	}
+	50% {
+		transform: rotate(10deg) translateY(-3px);
 	}
 }
 @keyframes drip {

@@ -5,7 +5,7 @@
 
 export type BotLook = { shape: string; color: string; eyes?: string }
 
-export type BotState = 'idle' | 'thinking' | 'working' | 'waiting' | 'blocked' | 'done'
+export type BotState = 'idle' | 'thinking' | 'working' | 'waiting' | 'asking' | 'blocked' | 'done'
 
 /** Bodies are drawn in a 100×100 box centred on 0,0; the extras (thought dots, sparkle) stay inside it too. */
 export const VIEWBOX = '-50 -50 100 100'
@@ -253,6 +253,7 @@ export const STATE_LABELS: Record<BotState, string> = {
 	thinking: 'Thinking',
 	working: 'Working',
 	waiting: 'Waiting for you',
+	asking: 'Waiting for your answer',
 	blocked: 'Stuck',
 	done: 'Done',
 }
