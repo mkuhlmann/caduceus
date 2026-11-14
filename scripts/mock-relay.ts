@@ -35,6 +35,8 @@
  *   magick -size 2880x1800 xc:black a.png -geometry +0+0 -composite b.png -geometry +1280+0 -composite \
  *     c.png -geometry +1600+0 -composite -define webp:lossless=true -define webp:method=6 out.webp
  */
+import { advance, noMarks, parseMarks } from '../src/lib/read-marks'
+
 const DIST = (process.env.CADUCEUS_DIST ?? new URL('../dist', import.meta.url).pathname).replace(/\/?$/, '/')
 const PORT = Number(process.env.MOCK_PORT ?? 7899)
 const now = Math.floor(Date.now() / 1000)
@@ -358,6 +360,8 @@ const jobs = [
 	job('j4', 'Weekly meal plan', 'Sundays at 17:00', 0, 60 * 24 * 12, 'ok', false),
 ]
 
+let readMarks = noMarks()
+
 const json = (data: unknown, status = 200) =>
 	new Response(JSON.stringify(data), { status, headers: { 'content-type': 'application/json' } })
 
@@ -437,6 +441,13 @@ Bun.serve({
 		if (p === 'runs') return json({ 'bot-scout': 'run-scout', ...activeRuns })
 		if (p === 'bots') return json(bots)
 		if (p === 'projects') return json([])
+		if (p === 'read-marks') {
+			if (req.method === 'PATCH') {
+				const patch = parseMarks(await req.json())
+				if (typeof patch !== 'string') readMarks = advance(readMarks, patch).next
+			}
+			return json({ marks: readMarks, now: Date.now() / 1000 })
+		}
 		if (p === 'rpc' && req.method === 'POST') {
 			const body: any = await req.json()
 			return json({ result: rpc(body.method, body.params ?? {}) })

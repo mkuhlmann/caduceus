@@ -3,6 +3,7 @@ import { ref, watch, watchEffect } from 'vue'
 import { get, put, post } from '@/lib/http'
 import { setTranscriptScope } from '@/lib/transcript-cache'
 import { usePreferences } from '@/stores/preferences'
+import { useReadMarks } from '@/stores/read-marks'
 
 export type ConnectionInfo = {
 	gatewayUrl: string
@@ -70,6 +71,9 @@ export const useApp = defineStore('app', () => {
 			return
 		}
 		usePreferences()
+			.load()
+			.catch(() => {})
+		useReadMarks()
 			.load()
 			.catch(() => {})
 		connection.value = await get('ui-api/connection')

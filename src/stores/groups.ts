@@ -1,8 +1,9 @@
 import { defineStore } from 'pinia'
-import { computed, reactive, ref } from 'vue'
+import { computed, reactive, ref, watch } from 'vue'
 import { onRpcEvent, rpc } from '@/lib/rpc'
 import { onResync } from '@/lib/live'
 import { poller } from '@/lib/poller'
+import { useReadMarks } from './read-marks'
 
 /**
  * Group chats: rooms where several bots and the user talk together. Hermes' gateway hosts and drives them (it
@@ -61,7 +62,6 @@ type RoomState = { room: Room; context?: RoomContext; driver_status?: DriverStat
 type Open = { state: RoomState | null; events: RoomEvent[]; epoch?: number; error: string; loading: boolean }
 
 const PROFILE = 'default'
-const SEEN_KEY = 'caduceus.roomSeen'
 
 export const useGroups = defineStore('groups', () => {
 	const rooms = ref<Room[]>([])
@@ -93,7 +93,7 @@ export const useGroups = defineStore('groups', () => {
 				error.value = ''
 				loaded.value = true
 				await Promise.all(rooms.value.map((r) => readTail(r.room_id)))
-				for (const r of rooms.value) if (seen.value[r.room_id] === undefined) markSeen(r.room_id)
+				adoptNew()
 			} catch (e) {
 				error.value = (e as Error).message
 			} finally {
@@ -286,15 +286,20 @@ export const useGroups = defineStore('groups', () => {
 		delete tails[roomId]
 	}
 
-	// Read state per browser, as for bots.
-	const seen = ref<Record<string, number>>(JSON.parse(localStorage.getItem(SEEN_KEY) ?? '{}'))
+	// Read state, shared by your devices as for bots.
+	const readMarks = useReadMarks()
 	function markSeen(roomId: string) {
 		const last = (open[roomId]?.events ?? tails[roomId] ?? []).at(-1)?.seq ?? 0
-		if ((seen.value[roomId] ?? -1) < last) {
-			seen.value = { ...seen.value, [roomId]: last }
-			localStorage.setItem(SEEN_KEY, JSON.stringify(seen.value))
-		}
+		readMarks.mark('rooms', roomId, last)
 	}
+	// A room Caduceus meets for the first time counts as read from its last event, so old rooms do not all light up.
+	// Only once the shared marks are in (another device may know it), and once its last event is.
+	function adoptNew() {
+		if (!readMarks.synced) return
+		for (const r of rooms.value)
+			if (readMarks.marks.rooms[r.room_id] === undefined && (open[r.room_id] || tails[r.room_id])) markSeen(r.room_id)
+	}
+	watch(() => readMarks.synced, adoptNew)
 
 	function lastMessage(roomId: string) {
 		return [...(open[roomId]?.events ?? tails[roomId] ?? [])]
@@ -304,9 +309,10 @@ export const useGroups = defineStore('groups', () => {
 
 	function unread(roomId: string) {
 		const last = lastMessage(roomId)
-		// A room this browser never looked at counts as read from the start, so old rooms do not all light up.
-		if (seen.value[roomId] === undefined) return false
-		return !!last && last.seq > seen.value[roomId]! && last.kind === 'message.member'
+		const seen = readMarks.marks.rooms[roomId]
+		// A room not yet marked (see adoptNew) counts as read.
+		if (seen === undefined) return false
+		return !!last && last.seq > seen && last.kind === 'message.member'
 	}
 
 	/** A bot handed something to the user (`@user`), or a command waits for approval. */

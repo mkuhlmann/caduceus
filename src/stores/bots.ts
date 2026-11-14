@@ -5,6 +5,7 @@ import { BOT_CHAT_TITLE, gateway, gwFor, setSessionProfile, type Session } from 
 import { get, patch, post, del, qs } from '@/lib/http'
 import { nearestColor, type BotLook, type BotState } from '@/lib/avatar'
 import { useSessions } from './sessions'
+import { useReadMarks } from './read-marks'
 import { onResync } from '@/lib/live'
 import { onRpcEvent } from '@/lib/rpc'
 
@@ -72,7 +73,6 @@ export type NewBot = {
 
 const DONE_MS = 4000
 const SECTIONS_KEY = 'caduceus.botSections'
-const SEEN_KEY = 'caduceus.botSeen'
 
 export type BotSection = { id: string; name: string }
 
@@ -312,30 +312,30 @@ export const useBots = defineStore('bots', () => {
 		localSections.value = list
 	}
 
-	// Unread: a bot's chat moved since this browser last looked at it.
-	const seen = ref<Record<string, number>>(readJson(SEEN_KEY, {}))
-	watch(seen, (v) => localStorage.setItem(SEEN_KEY, JSON.stringify(v)), { deep: true })
+	// Unread: a bot's chat moved since you last looked at it, on any device.
+	const readMarks = useReadMarks()
 	function lastActivity(name: string) {
 		const c = chats[name]
 		return Number(c?.last_active ?? c?.started_at ?? 0)
 	}
 	function unread(name: string) {
 		const at = lastActivity(name)
+		const seen = readMarks.marks.bots[name]
 		// Never seen: only count it once a conversation exists, and not for history from before Caduceus knew it.
-		return at > 0 && seen.value[name] !== undefined && at > seen.value[name]!
+		return at > 0 && seen !== undefined && at > seen
 	}
 	function markSeen(name: string) {
-		const at = Math.max(lastActivity(name), Date.now() / 1000)
-		if ((seen.value[name] ?? 0) < at) seen.value = { ...seen.value, [name]: at }
+		readMarks.mark('bots', name, Math.max(lastActivity(name), readMarks.now()))
 	}
-	// A bot this browser meets for the first time starts read.
+	// A bot Caduceus meets for the first time starts read. Only once the shared marks are in: another device may
+	// know it, with something still unread.
 	watch(
-		() => bots.value.map((b) => b.name),
-		(names) => {
-			const missing = names.filter((n) => seen.value[n] === undefined)
-			if (missing.length)
-				seen.value = { ...seen.value, ...Object.fromEntries(missing.map((n) => [n, Date.now() / 1000])) }
+		[() => readMarks.synced, () => bots.value.map((b) => b.name)],
+		([synced, names]) => {
+			if (!synced) return
+			for (const n of names) if (readMarks.marks.bots[n] === undefined) readMarks.mark('bots', n, readMarks.now())
 		},
+		{ immediate: true },
 	)
 
 	/** The bot's most recently active conversation other than its Bot Chat: a routine run, a delegated job. */

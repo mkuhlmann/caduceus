@@ -27,7 +27,7 @@ Caduceus is only the frontend. Point it at the URLs of a running Hermes gateway 
 - **Chat:** streamed replies. Each tool call shows as a step on the agent's route, and you can expand it for arguments and output. Risky commands get inline approval. You can stop a run, send a message mid-run to redirect it, and attach images. Click the microphone to dictate: Hermes turns your voice into text with its own speech-to-text provider, and Caduceus either puts the text in the message box or sends it right away, as you choose.
 - **Bots:** each Hermes profile is a bot with one long-running chat, compatible with Bot Mode in the Hermes desktop app, so both apps show the same bots.
   - Every bot gets an animated face that shows whether it is idle, thinking, working, waiting for you or stuck. Pick its body and colour, or upload a picture.
-  - Create, duplicate, pin, hide and sort bots into sections. Unread markers show which bot has news.
+  - Create, duplicate, pin, hide and sort bots into sections. Unread markers show which bot has news, and reading on one device clears them on the others.
   - `@mention` another bot and the bot you are talking to contacts it. Replies from other bots show up as notes in the chat.
   - Give each bot its own model, skills, toolsets, MCP servers and personality, and dock its routines (scheduled jobs) beside its chat.
   - The chat list shows your bots above your chats, with the ones at work in front.
