@@ -616,6 +616,7 @@ async function connectThisBot() {
 											:alt="bot.displayName"
 											:size="28"
 											:still="t.key !== lastAgentKey"
+											pettable
 										/>
 									</div>
 								</div>

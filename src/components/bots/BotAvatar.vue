@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, nextTick, onBeforeUnmount, ref } from 'vue'
 import {
 	COLORS,
 	STATE_LABELS,
@@ -20,6 +20,9 @@ import {
  * as dots rise into an exclamation mark; asking it leans and looks up at a question mark that sways above it; stuck
  * it slumps, greys and sweats; done it bounces once with happy eyes and a sparkle. The current action is in the
  * hover text.
+ *
+ * A `pettable` face that is idle answers a click with one of a few pleased moves, picked at random: a wiggle, a
+ * squish with a floating heart, a jump, or a giggle with sparkles.
  */
 const props = withDefaults(
 	defineProps<{
@@ -35,6 +38,8 @@ const props = withDefaults(
 		hint?: string
 		/** No motion and no extras: pickers, and the faces beside older replies. */
 		still?: boolean
+		/** Idle, a click plays a pleased animation. */
+		pettable?: boolean
 	}>(),
 	{ state: 'idle', size: 32 },
 )
@@ -61,6 +66,31 @@ const style = computed(() => ({
 	'--offset': `-${(n.value % 900) / 100}s`,
 }))
 
+/** Each move and how long it runs, in ms. */
+const MOVES = { wiggle: 900, heart: 1100, boing: 900, giggle: 1000 } as const
+type Move = keyof typeof MOVES
+
+const root = ref<HTMLElement>()
+const move = ref<Move | null>(null)
+const petReady = computed(() => !!props.pettable && !props.still && props.state === 'idle')
+let last: Move | null = null
+let timer: ReturnType<typeof setTimeout> | undefined
+
+async function pet() {
+	if (!petReady.value) return
+	const options = (Object.keys(MOVES) as Move[]).filter((m) => m !== last)
+	const next = options[Math.floor(Math.random() * options.length)]!
+	last = next
+	clearTimeout(timer)
+	// Clear the class and let a layout pass happen, so a click during a move starts the next one cleanly.
+	move.value = null
+	await nextTick()
+	void root.value?.offsetWidth
+	move.value = next
+	timer = setTimeout(() => (move.value = null), MOVES[next])
+}
+onBeforeUnmount(() => clearTimeout(timer))
+
 const label = computed(() => {
 	const who = props.alt ?? props.seed
 	return props.state === 'idle' ? who : `${who}: ${STATE_LABELS[props.state]}`
@@ -69,12 +99,16 @@ const label = computed(() => {
 
 <template>
 	<span
+		ref="root"
 		class="bot-avatar relative inline-block shrink-0"
-		:class="[`is-${state}`, { still, lively }]"
+		:class="[`is-${state}`, move && ['petted', `pet-${move}`], { still, lively, pettable: petReady }]"
 		:style="style"
-		role="img"
+		:role="petReady ? 'button' : 'img'"
+		:tabindex="petReady ? 0 : undefined"
 		:aria-label="label"
 		:title="hint ?? label"
+		@click="pet"
+		@keydown.enter.space.prevent="pet"
 	>
 		<template v-if="image">
 			<span class="photo absolute inset-0 overflow-hidden rounded-full">
@@ -87,6 +121,9 @@ const label = computed(() => {
 		<svg v-else :viewBox="VIEWBOX" class="face size-full overflow-visible" aria-hidden="true">
 			<g class="whole">
 				<path class="body" :d="path" :fill="color" />
+				<g v-if="petReady && extras" class="blush" fill="#ffb3c0">
+					<ellipse v-for="x in eyeX" :key="x" :cx="x * 1.8" :cy="eyes.y + 14" rx="7" ry="4" />
+				</g>
 				<g :transform="`translate(0 ${eyes.y})`">
 					<template v-if="state === 'done'">
 						<g fill="none" :stroke="eyeFill" stroke-width="4.4" stroke-linecap="round">
@@ -99,19 +136,24 @@ const label = computed(() => {
 							<path :d="`M${eyeX[1]! - 6} 4L${eyeX[1]! + 6} 0`" />
 						</g>
 					</template>
-					<g v-else class="gaze">
-						<g class="lid" :fill="eyeFill">
-							<rect
-								v-for="x in eyeX"
-								:key="x"
-								:x="x - eyes.w / 2"
-								:y="-eyes.h / 2"
-								:width="eyes.w"
-								:height="eyes.h"
-								:rx="eyes.w / 2"
-							/>
+					<template v-else>
+						<g class="gaze">
+							<g class="lid" :fill="eyeFill">
+								<rect
+									v-for="x in eyeX"
+									:key="x"
+									:x="x - eyes.w / 2"
+									:y="-eyes.h / 2"
+									:width="eyes.w"
+									:height="eyes.h"
+									:rx="eyes.w / 2"
+								/>
+							</g>
 						</g>
-					</g>
+						<g v-if="petReady" class="pleased" fill="none" :stroke="eyeFill" stroke-width="4.4" stroke-linecap="round">
+							<path v-for="x in eyeX" :key="x" :d="`M${x - 6} 3Q${x} -7 ${x + 6} 3`" />
+						</g>
+					</template>
 				</g>
 				<path
 					v-if="extras && state === 'blocked'"
@@ -125,6 +167,19 @@ const label = computed(() => {
 				<circle cx="33" cy="-41" r="3.4" />
 				<circle cx="41" cy="-49" r="4.2" />
 			</g>
+			<template v-if="petReady && extras">
+				<path
+					class="love"
+					fill="#ff8fa3"
+					d="M30 -30C22 -36 19 -42 24 -45C27 -47 30 -44 30 -42C30 -44 33 -47 36 -45C41 -42 38 -36 30 -30Z"
+				/>
+				<g class="glints" fill="#fff">
+					<path d="M-38 -38Q-38 -32 -32 -32Q-38 -32 -38 -26Q-38 -32 -44 -32Q-38 -32 -38 -38Z" />
+					<path d="M38 -42Q38 -35 45 -35Q38 -35 38 -28Q38 -35 31 -35Q38 -35 38 -42Z" />
+					<path d="M44 8Q44 13 49 13Q44 13 44 18Q44 13 39 13Q44 13 44 8Z" />
+					<path d="M-44 6Q-44 11 -39 11Q-44 11 -44 16Q-44 11 -49 11Q-44 11 -44 6Z" />
+				</g>
+			</template>
 			<path
 				v-if="extras && state === 'done'"
 				class="sparkle"
@@ -307,6 +362,68 @@ const label = computed(() => {
 }
 .sparkle {
 	animation: twinkle 2.4s ease-in-out infinite;
+}
+
+/* Petted: happy eyes and a blush for the length of the move, plus the move itself. */
+.pettable {
+	cursor: pointer;
+	border-radius: 999px;
+}
+.blush,
+.pleased,
+.love,
+.glints path {
+	opacity: 0;
+}
+.pet-wiggle {
+	--pet: 900ms;
+}
+.pet-heart {
+	--pet: 1100ms;
+}
+.pet-boing {
+	--pet: 900ms;
+}
+.pet-giggle {
+	--pet: 1000ms;
+}
+.petted .gaze {
+	animation: eyes-off var(--pet) linear;
+}
+.petted .pleased,
+.petted .blush {
+	animation: eyes-on var(--pet) linear;
+}
+.pet-wiggle .whole,
+.pet-wiggle .photo {
+	animation: wiggle var(--pet) ease-in-out;
+}
+.pet-heart .whole,
+.pet-heart .photo {
+	animation: squish 600ms var(--ease-out);
+}
+.pet-heart .love {
+	animation: float var(--pet) ease-out;
+}
+.pet-boing .whole,
+.pet-boing .photo {
+	animation: boing var(--pet) cubic-bezier(0.3, 0.7, 0.4, 1);
+}
+.pet-giggle .whole,
+.pet-giggle .photo {
+	animation: giggle 700ms linear;
+}
+.pet-giggle .glints path {
+	animation: burst 800ms var(--ease-out) both;
+}
+.pet-giggle .glints path:nth-child(2) {
+	animation-delay: 80ms;
+}
+.pet-giggle .glints path:nth-child(3) {
+	animation-delay: 160ms;
+}
+.pet-giggle .glints path:nth-child(4) {
+	animation-delay: 240ms;
 }
 
 .still *,
@@ -494,6 +611,145 @@ const label = computed(() => {
 	65% {
 		opacity: 1;
 		transform: scale(1) rotate(45deg);
+	}
+}
+@keyframes eyes-off {
+	0% {
+		opacity: 1;
+	}
+	8%,
+	82% {
+		opacity: 0;
+	}
+	92%,
+	100% {
+		opacity: 1;
+	}
+}
+@keyframes eyes-on {
+	0% {
+		opacity: 0;
+	}
+	8%,
+	82% {
+		opacity: 1;
+	}
+	92%,
+	100% {
+		opacity: 0;
+	}
+}
+@keyframes wiggle {
+	0%,
+	100% {
+		transform: none;
+	}
+	15% {
+		transform: rotate(-10deg);
+	}
+	35% {
+		transform: rotate(9deg);
+	}
+	55% {
+		transform: rotate(-6deg);
+	}
+	75% {
+		transform: rotate(3deg);
+	}
+}
+@keyframes squish {
+	0%,
+	100% {
+		transform: none;
+	}
+	25% {
+		transform: scale(1.1, 0.88);
+	}
+	55% {
+		transform: scale(0.95, 1.07);
+	}
+	80% {
+		transform: scale(1.02, 0.98);
+	}
+}
+@keyframes float {
+	0% {
+		opacity: 0;
+		transform: translate(-6px, 8px) scale(0.3);
+	}
+	20% {
+		opacity: 1;
+		transform: translate(0, 0) scale(1.1);
+	}
+	70% {
+		opacity: 1;
+		transform: translate(3px, -12px) scale(1) rotate(8deg);
+	}
+	100% {
+		opacity: 0;
+		transform: translate(4px, -20px) scale(0.9) rotate(12deg);
+	}
+}
+@keyframes boing {
+	0%,
+	100% {
+		transform: none;
+	}
+	15% {
+		transform: scale(1.16, 0.82);
+	}
+	40% {
+		transform: translateY(-34%) scale(0.9, 1.12);
+	}
+	62% {
+		transform: translateY(0) scale(1.14, 0.86);
+	}
+	78% {
+		transform: scale(0.97, 1.04);
+	}
+	90% {
+		transform: scale(1.01, 0.99);
+	}
+}
+@keyframes giggle {
+	0%,
+	100% {
+		transform: none;
+	}
+	10% {
+		transform: translate(-3%, -2%) rotate(-3deg);
+	}
+	20% {
+		transform: translate(3%, 0) rotate(3deg);
+	}
+	30% {
+		transform: translate(-3%, -3%) rotate(-3deg);
+	}
+	40% {
+		transform: translate(3%, 0) rotate(2deg);
+	}
+	50% {
+		transform: translate(-2%, -2%) rotate(-2deg);
+	}
+	60% {
+		transform: translate(2%, 0) rotate(2deg);
+	}
+	75% {
+		transform: translate(-1%, -1%);
+	}
+}
+@keyframes burst {
+	0% {
+		opacity: 0;
+		transform: scale(0.2) translate(0, 6px);
+	}
+	30% {
+		opacity: 1;
+		transform: scale(1.1);
+	}
+	100% {
+		opacity: 0;
+		transform: scale(0.5) translate(0, -6px) rotate(60deg);
 	}
 }
 @keyframes turn {
