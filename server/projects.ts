@@ -1,8 +1,8 @@
 import { Elysia } from 'elysia'
-import { mkdirSync, readFileSync, writeFileSync, existsSync } from 'node:fs'
-import { join, dirname } from 'node:path'
+import { Type, type Static } from '@sinclair/typebox'
 import { randomUUID } from 'node:crypto'
 import { broadcast } from './hermes-socket'
+import { saveState, state, type Project } from './store'
 
 /**
  * Projects group chats and carry standing instructions that are sent as the system
@@ -10,86 +10,80 @@ import { broadcast } from './hermes-socket'
  * working directory on the agent host, which the public chat API does not expose, so
  * these live with the UI instead.
  */
-export type Project = {
-	id: string
-	name: string
-	description: string
-	instructions: string
-	color: string
-	sessionIds: string[]
-	createdAt: number
-	updatedAt: number
-}
+export type { Project }
 
-const file = join(process.env.CADUCEUS_DATA_DIR ?? join(process.cwd(), '.data'), 'projects.json')
+/** What a person may set on a project. */
+const EditSchema = Type.Partial(
+	Type.Object({
+		name: Type.String(),
+		description: Type.String(),
+		instructions: Type.String(),
+		color: Type.String(),
+		sessionIds: Type.Array(Type.String()),
+	}),
+)
+type Edit = Static<typeof EditSchema>
 
-function load(): Project[] {
-	if (!existsSync(file)) return []
-	try {
-		return JSON.parse(readFileSync(file, 'utf8'))
-	} catch {
-		return []
-	}
-}
-
-let projects = load()
-
+/** Projects are kept in `state.json`. */
 function persist() {
-	mkdirSync(dirname(file), { recursive: true })
-	writeFileSync(file, JSON.stringify(projects, null, 2))
+	saveState()
 	// Other devices take the change at once.
 	broadcast('caduceus.projects')
 }
 
-const EDITABLE = ['name', 'description', 'instructions', 'color', 'sessionIds'] as const
-
-function clean(body: any): Partial<Project> {
-	const out: any = {}
-	for (const k of EDITABLE) {
-		if (!(k in (body ?? {}))) continue
-		out[k] = k === 'sessionIds' ? [...new Set((body[k] as unknown[]).map(String))] : String(body[k] ?? '')
-	}
-	return out
-}
+/** A chat is listed once. */
+const clean = (e: Edit): Edit => (e.sessionIds ? { ...e, sessionIds: [...new Set(e.sessionIds)] } : e)
 
 export const projectRoutes = new Elysia({ prefix: '/ui-api/projects' })
-	.get('/', () => projects)
-	.post('/', ({ body }) => {
-		const now = Date.now()
-		const p: Project = {
-			id: randomUUID(),
-			name: 'Untitled project',
-			description: '',
-			instructions: '',
-			color: 'lapis',
-			sessionIds: [],
-			createdAt: now,
-			updatedAt: now,
-			...clean(body),
-		}
-		projects.push(p)
-		persist()
-		return p
-	})
-	.patch('/:id', ({ params, body, set }) => {
-		const p = projects.find((x) => x.id === params.id)
-		if (!p) return ((set.status = 404), { error: 'Project not found' })
-		Object.assign(p, clean(body), { updatedAt: Date.now() })
-		persist()
-		return p
-	})
-	.post('/:id/sessions', ({ params, body, set }) => {
-		const sessionId = String((body as any)?.sessionId ?? '')
-		// A chat belongs to at most one project.
-		for (const p of projects) p.sessionIds = p.sessionIds.filter((s) => s !== sessionId)
-		const p = projects.find((x) => x.id === params.id)
-		if (params.id !== 'none' && !p) return ((set.status = 404), { error: 'Project not found' })
-		if (p && sessionId) p.sessionIds.unshift(sessionId)
-		persist()
-		return { ok: true }
-	})
+	.get('/', () => state.projects)
+	.post(
+		'/',
+		({ body }) => {
+			const now = Date.now()
+			const p: Project = {
+				id: randomUUID(),
+				name: 'Untitled project',
+				description: '',
+				instructions: '',
+				color: 'lapis',
+				sessionIds: [],
+				createdAt: now,
+				updatedAt: now,
+				...clean(body ?? {}),
+			}
+			state.projects.push(p)
+			persist()
+			return p
+		},
+		{ body: Type.Optional(EditSchema) },
+	)
+	.patch(
+		'/:id',
+		({ params, body, set }) => {
+			const p = state.projects.find((x) => x.id === params.id)
+			if (!p) return ((set.status = 404), { error: 'Project not found' })
+			Object.assign(p, clean(body), { updatedAt: Date.now() })
+			persist()
+			return p
+		},
+		{ body: EditSchema },
+	)
+	.post(
+		'/:id/sessions',
+		({ params, body, set }) => {
+			const { sessionId } = body
+			const p = state.projects.find((x) => x.id === params.id)
+			if (params.id !== 'none' && !p) return ((set.status = 404), { error: 'Project not found' })
+			// A chat belongs to at most one project.
+			for (const q of state.projects) q.sessionIds = q.sessionIds.filter((s) => s !== sessionId)
+			if (p && sessionId) p.sessionIds.unshift(sessionId)
+			persist()
+			return { ok: true }
+		},
+		{ body: Type.Object({ sessionId: Type.String() }) },
+	)
 	.delete('/:id', ({ params }) => {
-		projects = projects.filter((x) => x.id !== params.id)
+		state.projects = state.projects.filter((x) => x.id !== params.id)
 		persist()
 		return { ok: true }
 	})

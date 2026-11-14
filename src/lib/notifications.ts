@@ -9,6 +9,9 @@
  * clears it, and a device showing that chat gets none for it.
  */
 
+import { Type, type Static } from '@sinclair/typebox'
+import { withoutDefaults } from './schema'
+
 export const EVENT_KINDS = ['waiting', 'reply', 'room', 'schedule'] as const
 export type EventKind = (typeof EVENT_KINDS)[number]
 
@@ -28,79 +31,54 @@ export type Notice = {
 	route: string
 }
 
-export type Target = { kind: 'ntfy'; url: string; token?: string } | { kind: 'webhook'; url: string }
+const Address = Type.String({ pattern: '^https?://[^\\s]+$', description: 'An http or https address.' })
 
-export type NotifyConfig = {
-	events: Record<EventKind, boolean>
-	/** While you use Caduceus on one device, no other device or channel is told. */
-	quietWhileActive: boolean
-	/** Channels besides the devices: an ntfy topic, or a webhook that gets each notice as JSON. */
-	targets: Target[]
-}
+export const ChannelSchema = Type.Union(
+	[
+		Type.Object(
+			{ kind: Type.Literal('ntfy'), url: Address, token: Type.Optional(Type.String({ minLength: 1 })) },
+			{ additionalProperties: false },
+		),
+		Type.Object({ kind: Type.Literal('webhook'), url: Address }, { additionalProperties: false }),
+	],
+	{ error: 'A channel is an ntfy topic or a webhook with an http or https address.' },
+)
+/** Somewhere besides your devices that gets every notice: an ntfy topic, or a webhook that gets it as JSON. */
+export type Channel = Static<typeof ChannelSchema>
 
-export const defaultConfig = (): NotifyConfig => ({
-	events: { waiting: true, reply: true, room: true, schedule: true },
-	quietWhileActive: true,
-	targets: [],
-})
+export const NotifySettingsSchema = Type.Object(
+	{
+		events: Type.Object(
+			{
+				waiting: Type.Boolean({ default: true }),
+				reply: Type.Boolean({ default: true }),
+				room: Type.Boolean({ default: true }),
+				schedule: Type.Boolean({ default: true }),
+			},
+			{ additionalProperties: false, default: {} },
+		),
+		/** While you use Caduceus on one device, no other device or channel is told. */
+		quietWhileActive: Type.Boolean({ default: true }),
+		channels: Type.Array(ChannelSchema, { default: [] }),
+	},
+	{ additionalProperties: false, default: {} },
+)
+export type NotifySettings = Static<typeof NotifySettingsSchema>
 
-const isUrl = (v: unknown): v is string => {
-	if (typeof v !== 'string') return false
-	try {
-		return ['http:', 'https:'].includes(new URL(v).protocol)
-	} catch {
-		return false
-	}
-}
-
-/** One channel from outside (a request body, a stored file), or why it is not one. */
-export function parseTarget(v: unknown): Target | string {
-	const t = v as Record<string, unknown> | null
-	if (!t || typeof t !== 'object') return 'A channel must be an object.'
-	if (!isUrl(t.url)) return 'A channel needs an http or https address.'
-	if (t.kind === 'webhook') return { kind: 'webhook', url: t.url }
-	if (t.kind === 'ntfy') {
-		const token = typeof t.token === 'string' && t.token.trim() ? t.token.trim() : undefined
-		return token ? { kind: 'ntfy', url: t.url, token } : { kind: 'ntfy', url: t.url }
-	}
-	return `Unknown kind of channel "${String(t.kind)}".`
-}
-
-/** A config patch from outside, taken onto `base`, or why it cannot be. */
-export function parseConfig(v: unknown, base: NotifyConfig = defaultConfig()): NotifyConfig | string {
-	if (!v || typeof v !== 'object' || Array.isArray(v)) return 'Notification settings must be an object.'
-	const p = v as Record<string, unknown>
-	const out: NotifyConfig = {
-		events: { ...base.events },
-		quietWhileActive: base.quietWhileActive,
-		targets: base.targets,
-	}
-	for (const k of Object.keys(p))
-		if (!['events', 'quietWhileActive', 'targets'].includes(k)) return `Unknown notification setting "${k}".`
-	if (p.events !== undefined) {
-		if (!p.events || typeof p.events !== 'object') return 'events must be an object.'
-		for (const [k, on] of Object.entries(p.events)) {
-			if (!(EVENT_KINDS as readonly string[]).includes(k)) return `Unknown kind of notification "${k}".`
-			if (typeof on !== 'boolean') return `events.${k} must be true or false.`
-			out.events[k as EventKind] = on
-		}
-	}
-	if (p.quietWhileActive !== undefined) {
-		if (typeof p.quietWhileActive !== 'boolean') return 'quietWhileActive must be true or false.'
-		out.quietWhileActive = p.quietWhileActive
-	}
-	if (p.targets !== undefined) {
-		if (!Array.isArray(p.targets)) return 'targets must be a list.'
-		const targets: Target[] = []
-		for (const t of p.targets) {
-			const parsed = parseTarget(t)
-			if (typeof parsed === 'string') return parsed
-			targets.push(parsed)
-		}
-		out.targets = targets
-	}
-	return out
-}
+/** A change to some of them; `events` may name only the kinds that change. */
+export const NotifyPatchSchema = Type.Object(
+	{
+		events: Type.Optional(
+			Type.Partial(withoutDefaults(NotifySettingsSchema.properties.events), { additionalProperties: false }),
+		),
+		quietWhileActive: Type.Optional(Type.Boolean()),
+		channels: Type.Optional(withoutDefaults(NotifySettingsSchema.properties.channels)),
+		/** Caduceus's address as the browser sees it, for links in channel messages. */
+		appUrl: Type.Optional(Type.String()),
+	},
+	{ additionalProperties: false },
+)
+export type NotifyPatch = Static<typeof NotifyPatchSchema>
 
 // ── Tags and routes ──────────────────────────────────────────────────────────────────────────────
 

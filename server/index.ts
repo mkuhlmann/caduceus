@@ -31,6 +31,18 @@ if (!loopback && !process.env.CADUCEUS_PASSWORD && process.env.CADUCEUS_ALLOW_NO
 }
 
 const app = new Elysia()
+	// A request body that does not fit its schema answers like every other error here.
+	.onError({ as: 'global' }, ({ code, error, set }) => {
+		if (code !== 'VALIDATION') return
+		set.status = 400
+		const e = error as { customError?: unknown; all?: { path?: string; summary?: string; message?: string }[] }
+		const first = e.all?.[0]
+		const message =
+			typeof e.customError === 'string'
+				? e.customError
+				: `${first?.path ? first.path + ': ' : ''}${first?.summary ?? first?.message ?? 'The request does not fit.'}`
+		return { error: { message, code: 'invalid_params' } }
+	})
 	.use(authRoutes)
 	.onBeforeHandle({ as: 'global' }, authGuard)
 	.use(projectRoutes)

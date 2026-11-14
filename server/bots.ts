@@ -1,7 +1,6 @@
 import { Elysia } from 'elysia'
-import { mkdirSync, readFileSync, writeFileSync, existsSync } from 'node:fs'
-import { join, dirname } from 'node:path'
 import { randomBytes } from 'node:crypto'
+import { saveState, state } from './store'
 import { relay } from './relay'
 import { broadcast, browsersListening, rpc, RpcError, viewerSupport } from './hermes-socket'
 import { readFace } from './face-color'
@@ -25,15 +24,6 @@ export type BotLook = { shape: string; color: string }
 const BOTS_KEY = 'hermes-bots'
 const OWN_KEY = 'caduceus'
 
-type LocalRecord = {
-	key?: string
-	updatedAt: number
-	// Before the metadata moved to Hermes it was kept here; migrated once, then dropped.
-	title?: string
-	look?: BotLook & { eyes?: string }
-	image?: string
-}
-
 type HermesProfile = {
 	name: string
 	is_default?: boolean
@@ -42,32 +32,14 @@ type HermesProfile = {
 	has_avatar?: boolean
 }
 
-const file = join(process.env.CADUCEUS_DATA_DIR ?? join(process.cwd(), '.data'), 'bots.json')
-
-function load(): Record<string, LocalRecord> {
-	if (!existsSync(file)) return {}
-	try {
-		return JSON.parse(readFileSync(file, 'utf8'))
-	} catch {
-		return {}
-	}
-}
-
-let local = load()
-
-function persist() {
-	mkdirSync(dirname(file), { recursive: true })
-	writeFileSync(file, JSON.stringify(local, null, 2), { mode: 0o600 })
-}
-
 /** The gateway key Caduceus set for a bot, for the relay. */
 export function botKey(name: string): string | undefined {
-	return local[name]?.key
+	return state.bots[name]?.key
 }
 
 /** The bots whose gateway the relay can reach: those it holds a key for. Hermes itself (`default`) is not one. */
 export function connectedBots(): string[] {
-	return Object.keys(local).filter((name) => local[name]?.key && name !== 'default')
+	return Object.keys(state.bots).filter((name) => state.bots[name]?.key && name !== 'default')
 }
 
 const NAME = /^[a-z0-9][a-z0-9_-]{0,63}$/
@@ -220,7 +192,7 @@ function publicBot(p: HermesProfile) {
 		pinned: !!meta.pinned,
 		sectionId: meta.sectionId ?? null,
 		sectionName: meta.sectionName ?? null,
-		connected: isDefault || !!local[p.name]?.key,
+		connected: isDefault || !!state.bots[p.name]?.key,
 		managed: !!p.ui_meta?.[BOTS_KEY],
 	}
 }
@@ -234,7 +206,7 @@ async function settle(list: HermesProfile[]) {
 	for (const p of list) {
 		if (settled.has(p.name)) continue
 		settled.add(p.name)
-		const old = local[p.name]
+		const old = state.bots[p.name]
 		const bots: Record<string, any> = {}
 		const own: Record<string, any> = {}
 		if (old?.title && !p.ui_meta?.[BOTS_KEY]?.title) bots.title = old.title
@@ -254,7 +226,7 @@ async function settle(list: HermesProfile[]) {
 				delete old.title
 				delete old.look
 				delete old.image
-				persist()
+				saveState()
 			}
 		} catch {
 			settled.delete(p.name)
@@ -263,9 +235,9 @@ async function settle(list: HermesProfile[]) {
 }
 
 function remember(name: string, key: string) {
-	;(local[name] ??= { updatedAt: Date.now() }).key = key
-	local[name]!.updatedAt = Date.now()
-	persist()
+	;(state.bots[name] ??= { updatedAt: Date.now() }).key = key
+	state.bots[name]!.updatedAt = Date.now()
+	saveState()
 }
 
 /** Give the bot a fresh gateway key in its own `.env` and remember it. */
@@ -303,7 +275,7 @@ export function refreshBotKey(name: string): Promise<string | undefined> {
 	const last = refreshing.get(name)
 	if (last && Date.now() - last.at < REFRESH_GAP) return last.done
 	const done = currentKey(name).then((key) => {
-		if (!key || key === local[name]?.key) return undefined
+		if (!key || key === state.bots[name]?.key) return undefined
 		remember(name, key)
 		return key
 	})
@@ -629,8 +601,8 @@ export const botRoutes = new Elysia({ prefix: '/ui-api/bots' })
 		} catch (e) {
 			if ((e as BotError).status !== 404) return fail(set, e)
 		}
-		delete local[params.name]
+		delete state.bots[params.name]
 		settled.delete(params.name)
-		persist()
+		saveState()
 		return { ok: true }
 	})

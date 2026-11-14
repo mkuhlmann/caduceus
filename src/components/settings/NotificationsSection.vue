@@ -6,7 +6,7 @@ import ToggleSwitch from './ToggleSwitch.vue'
 import { patch, post } from '@/lib/http'
 import { onRpcEvent } from '@/lib/rpc'
 import { relative } from '@/lib/time'
-import { EVENT_KINDS, EVENT_LABELS, type EventKind, type NotifyConfig, type Target } from '@/lib/notifications'
+import { EVENT_KINDS, EVENT_LABELS, type Channel, type EventKind, type NotifyPatch } from '@/lib/notifications'
 import {
 	currentSubscription,
 	deviceId,
@@ -70,7 +70,7 @@ async function toggleDevice(want: boolean) {
 	}
 }
 
-async function save(change: Partial<NotifyConfig>, what: string) {
+async function save(change: NotifyPatch, what: string) {
 	try {
 		state.value = await patch<NotifyState>('ui-api/notify', change)
 	} catch (e) {
@@ -109,24 +109,24 @@ async function sendTest() {
 }
 
 // Channels
-const newKind = ref<Target['kind']>('ntfy')
+const newKind = ref<Channel['kind']>('ntfy')
 const newUrl = ref('')
 const newToken = ref('')
 const adding = ref(false)
 
-const kindName = (t: Target) => (t.kind === 'ntfy' ? 'ntfy topic' : 'Webhook')
+const kindName = (t: Channel) => (t.kind === 'ntfy' ? 'ntfy topic' : 'Webhook')
 
-async function addTarget() {
+async function addChannel() {
 	const url = newUrl.value.trim()
 	if (!url) return
-	const target: Target =
+	const target: Channel =
 		newKind.value === 'ntfy'
 			? { kind: 'ntfy', url, ...(newToken.value.trim() ? { token: newToken.value.trim() } : {}) }
 			: { kind: 'webhook', url }
 	adding.value = true
 	try {
 		state.value = await patch<NotifyState>('ui-api/notify', {
-			targets: [...state.value!.config.targets, target],
+			channels: [...state.value!.config.channels, target],
 			appUrl: new URL('./', location.href).href.replace(/#.*$/, ''),
 		})
 		newUrl.value = ''
@@ -139,8 +139,8 @@ async function addTarget() {
 	}
 }
 
-async function removeTarget(i: number) {
-	const t = state.value!.config.targets[i]!
+async function removeChannel(i: number) {
+	const t = state.value!.config.channels[i]!
 	const ok = await dialogs.confirm({
 		title: 'Remove channel',
 		body: `${kindName(t)} ${t.url} gets no more notifications.`,
@@ -150,7 +150,7 @@ async function removeTarget(i: number) {
 	if (!ok) return
 	try {
 		state.value = await patch<NotifyState>('ui-api/notify', {
-			targets: state.value!.config.targets.filter((_, j) => j !== i),
+			channels: state.value!.config.channels.filter((_, j) => j !== i),
 		})
 		toasts.push('Channel removed')
 	} catch (e) {
@@ -190,7 +190,7 @@ async function removeTarget(i: number) {
 			</ul>
 			<button
 				class="btn-outline mt-4"
-				:disabled="testing || (!state.devices.length && !state.config.targets.length)"
+				:disabled="testing || (!state.devices.length && !state.config.channels.length)"
 				@click="sendTest"
 			>
 				Send a test notification
@@ -229,16 +229,20 @@ async function removeTarget(i: number) {
 				<a class="underline" href="https://ntfy.sh" target="_blank" rel="noopener">ntfy</a> topic, or a webhook that
 				gets it as JSON.
 			</p>
-			<ul v-if="state.config.targets.length" class="mt-3 divide-y divide-line border-y border-line">
-				<li v-for="(t, i) in state.config.targets" :key="t.kind + t.url" class="flex items-center gap-3 py-2.5 text-sm">
+			<ul v-if="state.config.channels.length" class="mt-3 divide-y divide-line border-y border-line">
+				<li
+					v-for="(t, i) in state.config.channels"
+					:key="t.kind + t.url"
+					class="flex items-center gap-3 py-2.5 text-sm"
+				>
 					<span class="shrink-0 text-ink-2">{{ kindName(t) }}</span>
 					<span class="min-w-0 flex-1 truncate font-mono text-xs">{{ t.url }}</span>
-					<button class="icon-btn" :aria-label="`Remove ${kindName(t)} ${t.url}`" @click="removeTarget(i)">
+					<button class="icon-btn" :aria-label="`Remove ${kindName(t)} ${t.url}`" @click="removeChannel(i)">
 						<Trash2 :size="16" />
 					</button>
 				</li>
 			</ul>
-			<form class="mt-4 space-y-3" @submit.prevent="addTarget">
+			<form class="mt-4 space-y-3" @submit.prevent="addChannel">
 				<div>
 					<label class="label" for="notify-kind">Kind</label>
 					<select id="notify-kind" v-model="newKind" class="field">

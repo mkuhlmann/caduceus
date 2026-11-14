@@ -1,9 +1,10 @@
 import { expect, test } from 'bun:test'
+import { Value } from '@sinclair/typebox/value'
 import {
 	audience,
 	failedRuns,
 	liveChanges,
-	parseConfig,
+	NotifyPatchSchema,
 	preview,
 	roomAsk,
 	tagOfRoute,
@@ -88,14 +89,14 @@ test('nobody hears of the chat they look at, and with quiet on nobody while one 
 	expect(audience({ tag: 'bot:max' }, [], true).send).toBe(true)
 })
 
-test('settings from outside are checked', () => {
-	expect(parseConfig({ events: { reply: false } })).toMatchObject({ events: { reply: false, waiting: true } })
-	expect(parseConfig({ events: { nope: true } })).toBeString()
-	expect(parseConfig({ targets: [{ kind: 'ntfy', url: 'ftp://x' }] })).toBeString()
-	expect(parseConfig({ targets: [{ kind: 'webhook', url: 'https://x.test/h' }] })).toMatchObject({
-		targets: [{ kind: 'webhook', url: 'https://x.test/h' }],
-	})
-	expect(parseConfig({ extra: 1 })).toBeString()
+test('notification settings from outside are checked', () => {
+	const ok = (v: unknown) => Value.Check(NotifyPatchSchema, v)
+	expect(ok({ events: { reply: false } })).toBe(true)
+	expect(ok({ events: { nope: true } })).toBe(false)
+	expect(ok({ channels: [{ kind: 'ntfy', url: 'ftp://x' }] })).toBe(false)
+	expect(ok({ channels: [{ kind: 'webhook', url: 'https://x.test/h' }] })).toBe(true)
+	expect(ok({ channels: [{ kind: 'webhook', url: 'https://x.test/h', token: 't' }] })).toBe(false)
+	expect(ok({ extra: 1 })).toBe(false)
 })
 
 test('a preview is plain and short', () => {

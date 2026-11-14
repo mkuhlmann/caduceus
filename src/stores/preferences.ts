@@ -3,15 +3,11 @@ import { ref } from 'vue'
 import { get, patch } from '@/lib/http'
 import { onResync } from '@/lib/live'
 import { onRpcEvent } from '@/lib/rpc'
+import { defaultPreferences as defaults, type Preferences } from '@/lib/preferences'
 
 /** Preferences kept on the Caduceus server (`server/preferences.ts`), so they follow you to every device. */
-export type Preferences = {
-	voiceSubmit: 'fill' | 'send'
-	tintMessages: boolean
-	runStats: boolean
-}
+export type { Preferences }
 
-const defaults: Preferences = { voiceSubmit: 'fill', tintMessages: true, runStats: false }
 const KEY = 'caduceus.preferences'
 
 /** Settings this browser kept before they moved to the server, with how each stored value reads. */

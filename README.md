@@ -166,8 +166,17 @@ Relay settings:
 | `CADUCEUS_PASSWORD`          | unset                             | Password that protects Caduceus itself. Required when `HOST` is not a loopback address.           |
 | `CADUCEUS_ALLOW_NO_PASSWORD` | unset                             | Set to `1` to run on a network address without a password, when a proxy in front handles sign-in. |
 | `CADUCEUS_SECRET`            | random on each start              | Key that signs session cookies. Set it to stay signed in across restarts.                         |
-| `CADUCEUS_DATA_DIR`          | `./.data` (`/data` in Docker)     | Where the connection settings, projects and bot keys are stored.                                  |
+| `CADUCEUS_DATA_DIR`          | `./.data` (`/data` in Docker)     | Where `config.json` and `state.json` are kept (see below).                                        |
 | `CADUCEUS_DIST`              | `../dist` next to the server      | Folder with the built UI.                                                                         |
+
+### Data folder
+
+The relay keeps two files in its data folder, both readable by their owner only:
+
+- `config.json` holds what you set in the app: the connection, your preferences and the notification settings.
+- `state.json` holds what Caduceus keeps for itself: read marks, projects, bot keys, the devices that get notifications and the relay's push key.
+
+Both are checked when the relay starts. If one does not fit, the relay does not start and says which field is wrong. Back up the whole folder: without `state.json`, projects are gone, bots must be connected again and every device must turn notifications on again. Data files from older versions are moved into these two on the first start and then deleted.
 
 ## Running from source
 
@@ -221,7 +230,7 @@ The relay watches Hermes on its own whenever a device or a channel wants notices
 - **A group chat needs you**: a bot wrote `@user`, or a command waits for approval.
 - **A schedule failed**: a job's last run ended in an error.
 
-Nothing notifies you about the chat you are looking at. While you use Caduceus on one device, the others stay quiet, unless you turn that off. Reading a chat on one device closes its notifications on the others (except on Apple devices, where they close when you open the app). The relay keeps its push key in `vapid.json` in the data folder; if that file is lost, every device has to turn notifications on again.
+Nothing notifies you about the chat you are looking at. While you use Caduceus on one device, the others stay quiet, unless you turn that off. Reading a chat on one device closes its notifications on the others (except on Apple devices, where they close when you open the app). The relay keeps its push key in `state.json`; if that file is lost, every device has to turn notifications on again.
 
 ## Releases
 

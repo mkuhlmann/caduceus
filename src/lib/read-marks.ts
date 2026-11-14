@@ -7,7 +7,15 @@
  * devices never undo one another's reading, whatever order their writes arrive in. The server and the browser
  * share this module.
  */
-export type ReadMarks = { bots: Record<string, number>; rooms: Record<string, number> }
+import { Type, type Static } from '@sinclair/typebox'
+import { Value } from '@sinclair/typebox/value'
+import { withoutDefaults } from './schema'
+
+const Marks = Type.Record(Type.String(), Type.Number({ minimum: 0 }), { default: {} })
+export const ReadMarksSchema = Type.Object({ bots: Marks, rooms: Marks }, { additionalProperties: false, default: {} })
+export type ReadMarks = Static<typeof ReadMarksSchema>
+/** Marks sent from a device: only the kinds it read. */
+export const ReadMarksPatchSchema = Type.Partial(withoutDefaults(ReadMarksSchema), { additionalProperties: false })
 
 export const KINDS = ['bots', 'rooms'] as const
 export type MarkKind = (typeof KINDS)[number]
@@ -29,18 +37,11 @@ export function advance(marks: ReadMarks, patch: Partial<ReadMarks>): { next: Re
 	return { next, moved }
 }
 
-/** Marks from outside (a request body, a stored file), or why they are not marks. */
+/** Marks from outside (a request body, a stored copy), or why they are not marks. */
 export function parseMarks(v: unknown): ReadMarks | string {
-	if (!v || typeof v !== 'object' || Array.isArray(v)) return 'Read marks must be an object.'
-	const out = noMarks()
-	for (const [kind, group] of Object.entries(v)) {
-		if (!(KINDS as readonly string[]).includes(kind)) return `Unknown kind of read mark "${kind}".`
-		if (!group || typeof group !== 'object' || Array.isArray(group)) return `Read marks for ${kind} must be an object.`
-		for (const [key, at] of Object.entries(group)) {
-			if (typeof at !== 'number' || !Number.isFinite(at) || at < 0)
-				return `${JSON.stringify(at)} is not a valid read mark for ${kind} "${key}".`
-			out[kind as MarkKind][key] = at
-		}
+	if (!Value.Check(ReadMarksPatchSchema, v)) {
+		const e = Value.Errors(ReadMarksPatchSchema, v).First()
+		return `Read marks${e?.path ? ' ' + e.path : ''}: ${e?.message ?? 'not an object'}.`
 	}
-	return out
+	return { bots: { ...v.bots }, rooms: { ...v.rooms } }
 }

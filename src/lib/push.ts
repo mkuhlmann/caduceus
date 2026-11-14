@@ -1,6 +1,6 @@
 import type { Router } from 'vue-router'
 import { del, get, put, request, url } from './http'
-import { tagOfRoute, type NotifyConfig } from './notifications'
+import { tagOfRoute, type NotifySettings } from './notifications'
 
 /**
  * This device's side of notifications (`server/notify.ts` sends them, `src/sw.js` shows them):
@@ -12,7 +12,7 @@ import { tagOfRoute, type NotifyConfig } from './notifications'
  */
 
 export type NotifyState = {
-	config: NotifyConfig
+	config: NotifySettings
 	publicKey: string
 	devices: { device: string; label: string; createdAt: number }[]
 }

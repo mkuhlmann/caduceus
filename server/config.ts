@@ -1,20 +1,14 @@
-import { mkdirSync, readFileSync, writeFileSync, existsSync } from 'node:fs'
-import { join, dirname } from 'node:path'
+import { config, saveConfig, type Connection } from './store'
 
 /**
  * Where Hermes lives. The UI never touches the Hermes host's filesystem; it only
  * needs two URLs: the gateway API server (chat, sessions, jobs) and, optionally,
  * the dashboard (config, skills, kanban, webhooks).
+ *
+ * Set on the connection page and kept in `config.json`, or set by the `HERMES_*` environment variables, which win
+ * and are never written to the file.
  */
-export type Connection = {
-	gatewayUrl: string
-	gatewayKey: string
-	dashboardUrl: string
-	dashboardToken: string
-	/** Dashboard basic auth (HERMES_DASHBOARD_BASIC_AUTH_* on the Hermes side). */
-	dashboardUsername: string
-	dashboardPassword: string
-}
+export type { Connection }
 
 const empty: Connection = {
 	gatewayUrl: '',
@@ -24,9 +18,6 @@ const empty: Connection = {
 	dashboardUsername: '',
 	dashboardPassword: '',
 }
-
-const dataDir = process.env.CADUCEUS_DATA_DIR ?? join(process.cwd(), '.data')
-const file = join(dataDir, 'connection.json')
 
 function fromEnv(): Partial<Connection> {
 	const e = process.env
@@ -42,22 +33,12 @@ function fromEnv(): Partial<Connection> {
 
 export const envLocked = Object.keys(fromEnv()).length > 0
 
-let current: Connection = load()
-
-function load(): Connection {
-	let saved: Partial<Connection> = {}
-	if (existsSync(file)) {
-		try {
-			saved = JSON.parse(readFileSync(file, 'utf8'))
-		} catch {}
-	}
-	return normalize({ ...empty, ...saved, ...fromEnv() })
-}
-
 function normalize(c: Connection): Connection {
 	const trim = (u: string) => u.trim().replace(/\/+$/, '')
 	return { ...c, gatewayUrl: trim(c.gatewayUrl), dashboardUrl: trim(c.dashboardUrl) }
 }
+
+let current = normalize({ ...config.connection, ...fromEnv() })
 
 export function getConnection(): Connection {
 	return current
@@ -65,15 +46,15 @@ export function getConnection(): Connection {
 
 export function saveConnection(patch: Partial<Connection>) {
 	// Secrets come back from the client redacted; keep the stored value unless replaced.
-	const next = { ...current }
+	const next = { ...config.connection }
 	for (const k of Object.keys(empty) as (keyof Connection)[]) {
 		const v = patch[k]
 		if (typeof v === 'string' && v !== REDACTED) next[k] = v
 	}
-	current = normalize({ ...next, ...fromEnv() })
+	config.connection = normalize(next)
+	saveConfig()
+	current = normalize({ ...config.connection, ...fromEnv() })
 	listeners.forEach((fn) => fn())
-	mkdirSync(dirname(file), { recursive: true })
-	writeFileSync(file, JSON.stringify(current, null, 2), { mode: 0o600 })
 }
 
 const listeners: (() => void)[] = []
