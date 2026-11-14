@@ -33,8 +33,30 @@ function pwa(): Plugin {
 	}
 }
 
+/** Preloads the latin Geologica, so the first paint already has the app's font instead of swapping it in later. */
+function preloadFont(): Plugin {
+	return {
+		name: 'caduceus-preload-font',
+		apply: 'build',
+		transformIndexHtml: {
+			order: 'post',
+			handler(_html, ctx) {
+				const font = Object.keys(ctx.bundle ?? {}).find((f) => /geologica-latin-wght-normal-.*\.woff2$/.test(f))
+				if (!font) return
+				return [
+					{
+						tag: 'link',
+						attrs: { rel: 'preload', href: './' + font, as: 'font', type: 'font/woff2', crossorigin: '' },
+						injectTo: 'head',
+					},
+				]
+			},
+		},
+	}
+}
+
 export default defineConfig({
-	plugins: [vue(), tailwindcss(), pwa()],
+	plugins: [vue(), tailwindcss(), pwa(), preloadFont()],
 	base: './',
 	resolve: { alias: { '@': fileURLToPath(new URL('./src', import.meta.url)) } },
 	server: {

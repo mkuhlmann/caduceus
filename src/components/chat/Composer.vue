@@ -1,8 +1,3 @@
-<script lang="ts">
-// In-memory drafts per chat, so switching chats doesn't carry over typed text or images.
-const drafts = new Map<string, { text: string; images: string[] }>()
-</script>
-
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
 import { ArrowUp, Check, ImagePlus, Mic, Square, X } from 'lucide-vue-next'
@@ -11,6 +6,7 @@ import { useApp } from '@/stores/app'
 import { usePreferences } from '@/stores/preferences'
 import { dashboard } from '@/lib/dashboard'
 import { toDataUrl, useRecorder } from '@/lib/voice'
+import { drafts } from '@/lib/drafts'
 import BotAvatar from '@/components/bots/BotAvatar.vue'
 import { mentionCandidates, mentionTag, typedMention, type MentionTarget } from '@/lib/mentions'
 import type { BotLook } from '@/lib/avatar'

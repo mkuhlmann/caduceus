@@ -7,6 +7,20 @@
 			content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content"
 		/>
 		<meta name="theme-color" content="#1e1d1d" />
+		<script>
+			// The saved theme before the first paint, so the page and the status bar never flash the other one.
+			// Mirrors the theme watcher in src/stores/app.ts.
+			try {
+				var theme = localStorage.getItem('caduceus.theme') || 'system'
+				var palette = localStorage.getItem('caduceus.darkColours') === 'lapis' ? 'lapis' : 'graphite'
+				var dark = theme === 'dark' || (theme === 'system' && matchMedia('(prefers-color-scheme: dark)').matches)
+				document.documentElement.dataset.theme = dark ? 'dark' : 'light'
+				document.documentElement.dataset.palette = palette
+				document
+					.querySelector('meta[name=theme-color]')
+					.setAttribute('content', dark ? (palette === 'lapis' ? '#151936' : '#1e1d1d') : '#eef0f7')
+			} catch (e) {}
+		</script>
 		<link rel="icon" href="./favicon.svg" type="image/svg+xml" />
 		<link rel="manifest" href="./manifest.webmanifest" />
 		<link rel="apple-touch-icon" href="./icons/apple-touch-icon.png" />
@@ -17,7 +31,13 @@
 		<title>Caduceus</title>
 	</head>
 	<body>
-		<div id="app"></div>
+		<!-- The app's frame until Vue mounts over it (.boot in src/style.css). -->
+		<div id="app">
+			<div class="boot" aria-hidden="true">
+				<div></div>
+				<div class="boot-rail"></div>
+			</div>
+		</div>
 		<script type="module" src="/src/main.ts"></script>
 	</body>
 </html>

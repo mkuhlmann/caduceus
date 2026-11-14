@@ -29,8 +29,9 @@ onMounted(async () => {
 </script>
 
 <template>
-	<div v-if="!app.ready" class="grid h-full place-items-center text-ink-3">
-		<span class="sr-only">Connecting to Hermes</span>
+	<div v-if="!app.ready" class="boot">
+		<div><span class="sr-only">Connecting to Hermes</span></div>
+		<div class="boot-rail" />
 	</div>
 	<LoginView v-else-if="app.uiAuth?.required && !app.uiAuth.authenticated" />
 	<div

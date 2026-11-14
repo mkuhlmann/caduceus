@@ -32,6 +32,9 @@ export function homePath() {
 /** The colour scheme used while the theme is dark. */
 export type DarkPalette = 'lapis' | 'graphite'
 const PALETTE_KEY = 'caduceus.darkColours'
+// The last known sign-in and connection, and the last connection probe, so opening the app paints at once.
+const BOOT_KEY = 'caduceus.boot'
+const PROBE_KEY = 'caduceus.probe'
 const DARK_BG: Record<DarkPalette, string> = { lapis: '#151936', graphite: '#1e1d1d' }
 
 export const useApp = defineStore('app', () => {
@@ -64,32 +67,81 @@ export const useApp = defineStore('app', () => {
 	const uiAuth = ref<{ required: boolean; authenticated: boolean } | null>(null)
 	const ready = ref(false)
 
+	type Auth = { required: boolean; authenticated: boolean }
+
+	/**
+	 * Opening the app paints at once from the last known state (signed in, the connection, the probe) and checks it
+	 * against the relay meanwhile; a session that ended meanwhile shows the sign-in. Only the first launch, or one
+	 * after signing out, waits for the relay.
+	 */
 	async function load() {
-		uiAuth.value = await get('ui-api/auth')
-		if (uiAuth.value?.required && !uiAuth.value.authenticated) {
+		const known = savedBoot()
+		if (known) {
+			apply(known.uiAuth, known.connection)
+			gateway.value = known.probe.gateway
+			dashboard.value = known.probe.dashboard
+			liveBots.value = known.probe.liveBots ?? null
+			ready.value = true
+			loadSynced()
+			Promise.all([get<Auth>('ui-api/auth'), get<ConnectionInfo>('ui-api/connection').catch(() => null)])
+				.then(([auth, conn]) => {
+					uiAuth.value = auth
+					if (!signedIn(auth)) return localStorage.removeItem(BOOT_KEY)
+					if (conn) apply(auth, conn)
+					test().catch(() => {})
+				})
+				// Offline or the relay is down: keep what is shown; the app catches up when it is back (lib/live.ts).
+				.catch(() => {})
+			return
+		}
+		const auth = await get<Auth>('ui-api/auth')
+		uiAuth.value = auth
+		if (!signedIn(auth)) {
 			ready.value = true
 			return
 		}
+		loadSynced()
+		apply(auth, await get<ConnectionInfo>('ui-api/connection'))
+		await test()
+		ready.value = true
+	}
+
+	const signedIn = (a: Auth | null) => !!a && (!a.required || a.authenticated)
+
+	function apply(auth: Auth, conn: ConnectionInfo) {
+		uiAuth.value = auth
+		if (conn.gatewayUrl !== connection.value?.gatewayUrl || !connection.value) setTranscriptScope(conn.gatewayUrl ?? '')
+		connection.value = conn
+		saveBoot()
+	}
+
+	/** Preferences and read marks, shared by all devices: read in the background. */
+	function loadSynced() {
 		usePreferences()
 			.load()
 			.catch(() => {})
 		useReadMarks()
 			.load()
 			.catch(() => {})
-		connection.value = await get('ui-api/connection')
-		setTranscriptScope(connection.value?.gatewayUrl ?? '')
-		// Assume the last known state so the UI paints at once; the probe corrects it.
-		const cached = JSON.parse(localStorage.getItem('caduceus.probe') ?? 'null')
-		if (cached) {
-			gateway.value = cached.gateway
-			dashboard.value = cached.dashboard
-			liveBots.value = cached.liveBots ?? null
-			ready.value = true
-			test().catch(() => {})
-			return
+	}
+
+	type Boot = {
+		uiAuth: Auth
+		connection: ConnectionInfo
+		probe: { gateway: Probe; dashboard: Probe; liveBots?: boolean | null }
+	}
+	function savedBoot(): Boot | null {
+		try {
+			const b = JSON.parse(localStorage.getItem(BOOT_KEY) ?? 'null')
+			const probe = JSON.parse(localStorage.getItem(PROBE_KEY) ?? 'null')
+			return b?.uiAuth && b.connection && probe && signedIn(b.uiAuth) ? { ...b, probe } : null
+		} catch {
+			return null
 		}
-		await test()
-		ready.value = true
+	}
+	function saveBoot() {
+		if (uiAuth.value && connection.value)
+			localStorage.setItem(BOOT_KEY, JSON.stringify({ uiAuth: uiAuth.value, connection: connection.value }))
 	}
 
 	async function test() {
@@ -97,13 +149,14 @@ export const useApp = defineStore('app', () => {
 		gateway.value = r.gateway
 		dashboard.value = r.dashboard
 		liveBots.value = r.liveBots ?? null
-		localStorage.setItem('caduceus.probe', JSON.stringify(r))
+		localStorage.setItem(PROBE_KEY, JSON.stringify(r))
 		return r
 	}
 
 	async function save(c: Partial<ConnectionInfo>) {
 		connection.value = await put('ui-api/connection', c)
 		setTranscriptScope(connection.value?.gatewayUrl ?? '')
+		saveBoot()
 		return test()
 	}
 
