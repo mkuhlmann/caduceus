@@ -10,6 +10,7 @@ Remote web UI for [Hermes Agent](https://github.com/NousResearch/hermes-agent). 
   - `/ui-api/dash/*` goes to the dashboard (`hermes_cli/web_routers/*`, `plugins/kanban/dashboard/plugin_api.py`): config, skills, kanban, webhooks, search.
   - `/ui-api/projects` is Caduceus's own project store (`server/projects.ts`).
   - `/ui-api/preferences` holds preferences that follow the user to every device (`server/preferences.ts`, read through `usePreferences()` in `src/stores/preferences.ts`). A new one needs a default and a validator there. Settings that belong to one screen, like the theme, stay in localStorage.
+  - `/ui-api/notify` is notifications: `server/notify.ts` delivers notices (Web Push through `server/webpush.ts`, ntfy, webhooks) and keeps the devices, settings and VAPID key; `server/notify-watch.ts` watches Hermes for them (`session.active_list`, chat streams via `onChatStream` in `server/runs.ts`, `groups.changed`, cron jobs). The rules (what is news, tags, routes, who is told) are pure, in `src/lib/notifications.ts`, shared with the browser; `src/lib/push.ts` subscribes and reports presence; `src/sw.js` shows them. Never send real pushes while testing: the tests decrypt locally.
   - `/ui-api/read-marks` holds how far each Bot Chat and Room has been read, shared by all devices (`server/read-marks.ts`, `src/stores/read-marks.ts`). Marks only move forward; the bots and groups stores read them through `unread` and set them with `markSeen`.
 - API clients:
   - `src/lib/gateway.ts` and `src/lib/dashboard.ts`.

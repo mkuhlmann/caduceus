@@ -54,3 +54,16 @@ _Avoid_: Interrupt, queue
 **Face**:
 A bot's drawn avatar. Its expression shows what the bot's run is doing or waiting for.
 _Avoid_: Avatar (for the state), icon
+
+## Notifications
+
+**Notice**:
+One piece of news the relay sends while you are away: a bot waits for you, a reply is ready, a room needs you, a schedule failed. A newer notice about the same chat replaces the older one.
+_Avoid_: Alert, push (that is how it travels)
+
+**Channel**:
+Somewhere besides your devices that gets every notice: an ntfy topic or a webhook.
+_Avoid_: Target, endpoint (in UI copy)
+
+**Presence**:
+A device saying it is in use right now, and which chat it shows, so that nothing notifies you about what you are looking at.

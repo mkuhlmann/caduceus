@@ -4,10 +4,12 @@ import App from './App.vue'
 import { router } from './router'
 import { fitToVisibleViewport } from './lib/viewport'
 import { registerServiceWorker } from './lib/pwa'
+import { startNotifications } from './lib/push'
 import './style.css'
 
 createApp(App).use(createPinia()).use(router).mount('#app')
 fitToVisibleViewport()
+startNotifications(router)
 
 // Load every page's code once the first screen is idle, so the first visit to a page doesn't wait on the network.
 const idle = window.requestIdleCallback ?? ((fn: () => void) => setTimeout(fn, 300))

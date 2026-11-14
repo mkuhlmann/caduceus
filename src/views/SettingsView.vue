@@ -7,6 +7,7 @@ import ModelSection from '@/components/settings/ModelSection.vue'
 import EnvSection from '@/components/settings/EnvSection.vue'
 import InterfaceSection from '@/components/settings/InterfaceSection.vue'
 import ConnectionSection from '@/components/settings/ConnectionSection.vue'
+import NotificationsSection from '@/components/settings/NotificationsSection.vue'
 import { categoryName, getIn, same, setIn } from '@/components/settings/util'
 import { dashboard } from '@/lib/dashboard'
 import { useResource } from '@/lib/resource'
@@ -43,6 +44,7 @@ type Section = { id: string; label: string }
 /** Caduceus's own settings: they change this app, never the agent, and work without the dashboard. */
 const caduceus: Section[] = [
 	{ id: 'interface', label: 'Interface' },
+	{ id: 'notifications', label: 'Notifications' },
 	{ id: 'connection', label: 'Connection' },
 ]
 /** Hermes' settings, read and written through its dashboard; the config categories follow these two. */
@@ -197,6 +199,7 @@ async function save() {
 				</p>
 
 				<InterfaceSection v-if="inCaduceus && section === 'interface'" />
+				<NotificationsSection v-else-if="inCaduceus && section === 'notifications'" />
 				<ConnectionSection v-else-if="inCaduceus && section === 'connection'" />
 				<div v-else-if="!app.dashboard?.ok" class="max-w-md space-y-3">
 					<p class="text-ink-2">

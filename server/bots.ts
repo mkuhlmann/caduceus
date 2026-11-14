@@ -65,6 +65,11 @@ export function botKey(name: string): string | undefined {
 	return local[name]?.key
 }
 
+/** The bots whose gateway the relay can reach: those it holds a key for. Hermes itself (`default`) is not one. */
+export function connectedBots(): string[] {
+	return Object.keys(local).filter((name) => local[name]?.key && name !== 'default')
+}
+
 const NAME = /^[a-z0-9][a-z0-9_-]{0,63}$/
 const MAX_IMAGE = 2_700_000
 const KEY_VAR = 'API_SERVER_KEY'
@@ -99,6 +104,20 @@ async function dash<T = any>(method: string, path: string, body?: unknown): Prom
 		throw new BotError(res.status >= 500 ? 502 : res.status, message, err?.code)
 	}
 	return data as T
+}
+
+/** Each bot's name as people see it (its title, or its profile name), read at most every few minutes. */
+let titles: { at: number; map: Map<string, string> } | undefined
+export async function botTitles(): Promise<Map<string, string>> {
+	if (titles && Date.now() - titles.at < 5 * 60_000) return titles.map
+	try {
+		const map = new Map<string, string>()
+		for (const p of await profiles()) map.set(p.name, String(p.ui_meta?.[BOTS_KEY]?.title ?? '').trim() || p.name)
+		titles = { at: Date.now(), map }
+	} catch {
+		titles ??= { at: 0, map: new Map() }
+	}
+	return titles.map
 }
 
 async function profiles(): Promise<HermesProfile[]> {

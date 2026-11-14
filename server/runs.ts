@@ -17,6 +17,8 @@ import { randomUUID } from 'node:crypto'
 type Stream = {
 	key: string
 	sessionId: string
+	/** The bot whose gateway runs it; `default` for Hermes itself. */
+	profile: string
 	runId?: string
 	/** Every event frame so far, as Hermes wrote it; the index is its number. */
 	frames: string[]
@@ -34,9 +36,46 @@ const streams = new Map<string, Stream>()
 const running = new Map<string, Stream>()
 
 // Bots' chats go through `/p/<profile>/` on the multiplexed gateway.
-const CHAT_STREAM = /^(?:\/p\/[^/]+)?\/api\/sessions\/([^/]+)\/chat\/stream$/
+const CHAT_STREAM = /^(?:\/p\/([^/]+))?\/api\/sessions\/([^/]+)\/chat\/stream$/
 
 export const isChatStream = (path: string) => CHAT_STREAM.test(path)
+
+/** What a chat stream through the relay says that matters while nobody looks: notifications hear of it. */
+export type StreamNews =
+	| { type: 'started'; sessionId: string; profile: string }
+	| { type: 'approval'; sessionId: string; profile: string; detail: string }
+	| { type: 'finished'; sessionId: string; profile: string; status: string; text: string; error?: string }
+
+const observers = new Set<(news: StreamNews) => void>()
+export function onChatStream(fn: (news: StreamNews) => void) {
+	observers.add(fn)
+}
+function tell(news: StreamNews) {
+	for (const fn of observers) {
+		try {
+			fn(news)
+		} catch {}
+	}
+}
+
+const NEWS = /approval\.request|assistant\.completed|run\.(?:completed|failed|cancelled)/
+
+/** A frame's event name and data, when it is one notifications care about. */
+function newsOf(frame: string): { name: string; data: any } | null {
+	if (!NEWS.test(frame)) return null
+	let name: string | undefined
+	const data: string[] = []
+	for (const line of frame.split(/\r?\n/)) {
+		if (line.startsWith('event:')) name = line.slice(6).trim()
+		else if (line.startsWith('data:')) data.push(line.slice(5).replace(/^ /, ''))
+	}
+	try {
+		const d = JSON.parse(data.join('\n'))
+		return { name: name ?? d.event ?? d.type ?? '', data: d }
+	} catch {
+		return null
+	}
+}
 
 const HEADERS = { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache', 'X-Accel-Buffering': 'no' }
 
@@ -46,7 +85,8 @@ export function trackChatStream(path: string, res: Response): Response {
 	if (!m || !res.ok || !res.body) return res
 	const stream: Stream = {
 		key: randomUUID(),
-		sessionId: decodeURIComponent(m[1]!),
+		sessionId: decodeURIComponent(m[2]!),
+		profile: m[1] ? decodeURIComponent(m[1]) : 'default',
 		frames: [],
 		done: false,
 		wake: new Set(),
@@ -59,10 +99,29 @@ export function trackChatStream(path: string, res: Response): Response {
 async function read(stream: Stream, body: ReadableStream) {
 	const reader = body.pipeThrough(new TextDecoderStream()).getReader()
 	let buf = ''
+	const who = { sessionId: stream.sessionId, profile: stream.profile }
+	let reply = ''
+	let finished = false
+	tell({ type: 'started', ...who })
 	const add = (frame: string) => {
 		// Comments (keepalives) carry nothing to replay.
 		if (!frame.split(/\r?\n/).some((line) => line && !line.startsWith(':'))) return
 		stream.frames.push(frame)
+		const news = newsOf(frame)
+		if (news?.name === 'approval.request')
+			tell({ type: 'approval', ...who, detail: String(news.data.command ?? news.data.description ?? '') })
+		else if (news?.name === 'assistant.completed') reply = String(news.data.content ?? '')
+		else if (news && /^run\.(?:completed|failed|cancelled)$/.test(news.name)) {
+			finished = true
+			const error = news.data.error?.message ?? news.data.error
+			tell({
+				type: 'finished',
+				...who,
+				status: news.name.slice(4),
+				text: reply,
+				error: error ? String(error) : undefined,
+			})
+		}
 		if (!stream.runId) {
 			const hit = frame.match(/"run_id"\s*:\s*"([^"]+)"/)
 			if (hit) {
@@ -87,6 +146,7 @@ async function read(stream: Stream, body: ReadableStream) {
 	} catch {
 		// Hermes went away mid-stream: what arrived stays readable, and the stream ends here.
 	} finally {
+		if (!finished) tell({ type: 'finished', ...who, status: 'lost', text: reply })
 		stream.done = true
 		if (running.get(stream.sessionId) === stream) running.delete(stream.sessionId)
 		wakeAll(stream)

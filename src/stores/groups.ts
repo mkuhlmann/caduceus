@@ -4,6 +4,7 @@ import { onRpcEvent, rpc } from '@/lib/rpc'
 import { onResync } from '@/lib/live'
 import { poller } from '@/lib/poller'
 import { useReadMarks } from './read-marks'
+import { roomAsk } from '@/lib/notifications'
 
 /**
  * Group chats: rooms where several bots and the user talk together. Hermes' gateway hosts and drives them (it
@@ -315,18 +316,10 @@ export const useGroups = defineStore('groups', () => {
 		return !!last && last.seq > seen && last.kind === 'message.member'
 	}
 
-	/** A bot handed something to the user (`@user`), or a command waits for approval. */
+	/** A bot handed something to the user (`@user`), or a command waits for approval. The relay notifies by the same rule. */
 	function needsYou(roomId: string) {
 		const status = open[roomId]?.state?.driver_status ?? liveStatus[roomId]
-		if (status?.pending_actions?.some((a) => a.kind === 'approval')) return true
-		const events = open[roomId]?.events ?? tails[roomId] ?? []
-		let lastUser = 0
-		let lastAsk = 0
-		for (const e of events) {
-			if (e.kind === 'message.user') lastUser = e.seq
-			if (e.kind === 'message.member' && /(^|\s)@user\b/i.test(String(e.payload.text ?? ''))) lastAsk = e.seq
-		}
-		return lastAsk > lastUser
+		return roomAsk(open[roomId]?.events ?? tails[roomId] ?? [], status) !== null
 	}
 
 	function statusOf(roomId: string): DriverStatus | null {

@@ -38,6 +38,7 @@ Caduceus is only the frontend. Point it at the URLs of a running Hermes gateway 
 - **Webhooks:** manage incoming webhook subscriptions.
 - **Board:** the Hermes kanban board, with drag and drop, task details and comments.
 - **Skills:** turn installed skills on or off, edit and create them, and install from the hub.
+- **Notifications:** your phone or desktop browser can tell you when a bot waits for your approval or answer, a reply is ready, a group chat needs you, or a schedule failed, even while Caduceus is closed. The relay watches Hermes, so nothing has to stay open. Notices can also go to an [ntfy](https://ntfy.sh) topic or a webhook.
 - **Settings:** the model picker, every config section from Hermes' schema, and API keys. Light and dark themes, with two dark colour schemes (Graphite and Lapis), and your messages in a bot's chat can take that bot's colour.
 
 ## How it connects
@@ -210,6 +211,18 @@ It then opens full screen with its own icon. Browsers only offer installation ov
 
 The service worker (`src/sw.js`, written to `dist/sw.js` with a precache list by the build) caches only the built UI, so the app opens even when the relay is unreachable. It never caches or intercepts `/ui-api/*`, and each page load checks the network first, so a new deploy shows up on the next reload. The desktop app and the Vite dev server do not register it.
 
+### Notifications
+
+Turn them on per device under **Settings → Notifications**. They use Web Push, so they arrive while the app is closed; no app store and no Firebase project are involved. They need HTTPS like installing does, and on iPhone and iPad they work only in the app added to the Home Screen (iOS 16.4 or newer).
+
+The relay watches Hermes on its own whenever a device or a channel wants notices:
+
+- **A bot waits for you** and **a reply is ready**: it asks Hermes every few seconds which chats run and which wait for an answer (`session.active_list`), and reads the streams of chats started in Caduceus. This covers every bot's Bot Chat and the chats you started here, not chats on other channels such as Telegram.
+- **A group chat needs you**: a bot wrote `@user`, or a command waits for approval.
+- **A schedule failed**: a job's last run ended in an error.
+
+Nothing notifies you about the chat you are looking at. While you use Caduceus on one device, the others stay quiet, unless you turn that off. Reading a chat on one device closes its notifications on the others (except on Apple devices, where they close when you open the app). The relay keeps its push key in `vapid.json` in the data folder; if that file is lost, every device has to turn notifications on again.
+
 ## Releases
 
 Versions are managed by [release-please](https://github.com/googleapis/release-please). It reads [Conventional Commits](https://www.conventionalcommits.org/) on `main` (`feat:`, `fix:`, `feat!:`) and keeps a release pull request open that bumps `package.json` and `CHANGELOG.md`. Merging it tags the version and creates the GitHub release; the release workflow then tags the Docker image on `ghcr.io` with the version, `<major>.<minor>` and `latest`, and builds the AppImage, the exe and the portable zip and attaches them to the release. Every push to `main` also publishes the image as `main`; desktop apps are built only for releases.
@@ -220,6 +233,7 @@ The UI uses hash routing and relative URLs, and has no shell-specific code. Any 
 
 ```
 src/        Vue 3 frontend (Pinia, vue-router, Tailwind v4)
-server/     Elysia relay: static files, auth, proxy to Hermes, Hermes socket bridge, project and bot key store
+server/     Elysia relay: static files, auth, proxy to Hermes, Hermes socket bridge, project and bot key store,
+            notifications
 desktop/    Desktop app (webview)
 ```

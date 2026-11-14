@@ -11,6 +11,8 @@ import { botRoutes, botsMayHaveChanged } from './bots'
 import { botWatchRoutes } from './bot-watch'
 import { rpcRoutes, viewerSupport } from './hermes-socket'
 import { runRoutes, trackChatStream } from './runs'
+import { notifyRoutes } from './notify'
+import './notify-watch'
 import { embedded } from './embedded'
 import { fileResponse } from './compress'
 
@@ -38,6 +40,7 @@ const app = new Elysia()
 	.use(botWatchRoutes)
 	.use(rpcRoutes)
 	.use(runRoutes)
+	.use(notifyRoutes)
 	.get('/ui-api/connection', () => publicConnection())
 	.put('/ui-api/connection', async ({ body, set }) => {
 		if (envLocked) {

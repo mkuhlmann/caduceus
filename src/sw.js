@@ -56,3 +56,65 @@ self.addEventListener('fetch', (event) => {
 	}
 	event.respondWith(caches.match(request, { cacheName: CACHE }).then((hit) => hit ?? fetch(request)))
 })
+
+// ── Notifications (server/notify.ts sends them; src/lib/push.ts subscribes) ─────────────────────────
+
+self.addEventListener('push', (event) => {
+	let msg = {}
+	try {
+		msg = event.data ? event.data.json() : {}
+	} catch {}
+	if (msg.type === 'clear') {
+		// Read on another device: its notification here has nothing left to say.
+		event.waitUntil(self.registration.getNotifications({ tag: msg.tag }).then((list) => list.forEach((n) => n.close())))
+		return
+	}
+	event.waitUntil(
+		self.registration.showNotification(msg.title || 'Caduceus', {
+			body: msg.body || '',
+			tag: msg.tag,
+			renotify: !!msg.tag,
+			icon: new URL('icons/icon-192.png', scope).href,
+			badge: new URL('icons/badge-96.png', scope).href,
+			data: { route: msg.route || '/' },
+			timestamp: Date.now(),
+		}),
+	)
+})
+
+self.addEventListener('notificationclick', (event) => {
+	event.notification.close()
+	const route = event.notification.data?.route || '/'
+	event.waitUntil(
+		self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then(async (list) => {
+			// A window of the app is open: it moves to the chat itself, without a reload.
+			const open = list.find((c) => c.url.startsWith(scope))
+			if (open) {
+				open.postMessage({ type: 'open', route })
+				return open.focus()
+			}
+			return self.clients.openWindow(scope + '#' + route)
+		}),
+	)
+})
+
+// The browser replaced the subscription by itself: tell the relay, which knows the device by its old one.
+self.addEventListener('pushsubscriptionchange', (event) => {
+	const old = event.oldSubscription
+	event.waitUntil(
+		(event.newSubscription
+			? Promise.resolve(event.newSubscription)
+			: old
+				? self.registration.pushManager.subscribe(old.options)
+				: Promise.resolve(null)
+		).then((sub) =>
+			sub && old
+				? fetch(new URL('ui-api/notify/renew', scope), {
+						method: 'POST',
+						headers: { 'Content-Type': 'application/json' },
+						body: JSON.stringify({ oldEndpoint: old.endpoint, subscription: sub.toJSON() }),
+					})
+				: undefined,
+		),
+	)
+})

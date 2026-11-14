@@ -25,6 +25,15 @@ let marks = load()
 
 const answer = () => ({ marks, now: Date.now() / 1000 })
 
+/** The marks as they stand. */
+export const currentMarks = () => marks
+
+const readers = new Set<(moved: ReadMarks) => void>()
+/** Hear of every mark that moves, on any device (notifications clear what was read). */
+export function onMarksMoved(fn: (moved: ReadMarks) => void) {
+	readers.add(fn)
+}
+
 export const readMarkRoutes = new Elysia({ prefix: '/ui-api/read-marks' })
 	.get('/', answer)
 	.patch('/', ({ body, set }) => {
@@ -37,6 +46,7 @@ export const readMarkRoutes = new Elysia({ prefix: '/ui-api/read-marks' })
 			writeFileSync(file, JSON.stringify(marks, null, 2))
 			// Other devices take the marks at once.
 			broadcast('caduceus.readMarks', moved)
+			for (const fn of readers) fn(moved)
 		}
 		return answer()
 	})
