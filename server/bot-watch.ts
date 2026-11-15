@@ -1,5 +1,6 @@
 import { Elysia } from 'elysia'
-import { onSocketEvent, rpc, RpcError, viewerSupport, type SocketEvent } from './hermes-socket'
+import { onSocketEvent, rpc, RpcError, viewerSupport, views, type SocketEvent } from './hermes-socket'
+import type { View } from './session-views'
 
 /**
  * A bot's Bot Chat runs in the bot's own queue inside the gateway, and its chat stream reports nothing until the
@@ -33,14 +34,6 @@ const TURN = new Set([
 // Hermes' own profile is the gateway's launch profile: it is addressed by naming none.
 const scope = (name: string) => (name === 'default' ? {} : { profile: name })
 
-type Attached = {
-	session_id?: string
-	subscription_id?: string
-	running?: boolean
-	execution_generation?: number
-	prompts?: Array<Record<string, unknown>>
-}
-
 export const botWatchRoutes = new Elysia({ prefix: '/ui-api/bots' })
 	.get('/:name/watch', async ({ params, query, request, set }) => {
 		const sessionId = String(query.session ?? '')
@@ -67,20 +60,16 @@ export const botWatchRoutes = new Elysia({ prefix: '/ui-api/bots' })
 		let ended = false
 		let off: (() => void) | undefined
 		let ping: ReturnType<typeof setInterval> | undefined
-		let attached: Attached = {}
+		let view: View | undefined
+		// Set once the view is attached: events of the chat are told apart by it.
+		let session: string | undefined
 
 		const detach = () => {
 			if (ended) return
 			ended = true
 			clearInterval(ping)
 			off?.()
-			// Never with an end reason: that would close the chat for every viewer. A plain detach leaves the turn alone.
-			if (attached.subscription_id)
-				rpc('session.detach', {
-					...scope(params.name),
-					session_id: attached.session_id ?? sessionId,
-					subscription_id: attached.subscription_id,
-				}).catch(() => {})
+			view?.release()
 		}
 
 		const stream = new ReadableStream({
@@ -113,19 +102,20 @@ export const botWatchRoutes = new Elysia({ prefix: '/ui-api/bots' })
 					if (e.type === 'socket.closed') return finish()
 					if (!TURN.has(e.type)) return
 					const sid = e.params?.session_id
-					if (!attached.session_id) {
+					if (!session) {
 						if (sid === sessionId || sid?.startsWith?.('local-')) early.push(e)
 						return
 					}
-					if (sid === attached.session_id) forward(e)
+					if (sid === session) forward(e)
 				})
 				try {
-					attached = await rpc<Attached>('session.resume', {
-						...scope(params.name),
-						session_id: sessionId,
-						omit_messages: true,
-					})
+					const v = await views.view(params.name, sessionId)
+					// The browser went away while the view attached.
+					if (ended) return v.release()
+					view = v
+					const attached = v.attached
 					if (!attached.session_id) throw new RpcError('Hermes did not open the chat.', 'no_session')
+					session = attached.session_id
 					// Reasoning goes to viewers only when the chat shows it, which a Bot Chat does not by default.
 					rpc('config.set', {
 						...scope(params.name),

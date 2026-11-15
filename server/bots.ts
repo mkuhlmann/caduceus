@@ -3,7 +3,7 @@ import { randomBytes } from 'node:crypto'
 import { saveState, state } from './store'
 import { botDisplayName } from '../src/lib/bot-name'
 import { relay } from './relay'
-import { broadcast, browsersListening, rpc, RpcError, viewerSupport } from './hermes-socket'
+import { broadcast, browsersListening, rpc, RpcError, viewerSupport, views } from './hermes-socket'
 import { readFace } from './face-color'
 
 /**
@@ -343,15 +343,15 @@ function fail(set: { status?: number | string }, e: unknown) {
 	return { error: { message: err.message, code: err.code } }
 }
 
-type Attached = { session_id?: string; subscription_id?: string; revision?: number; execution_generation?: number }
-
 /**
  * Compact on a socket the gateway serves (the Webapp's): there the chat is the gateway's own, and compacting is a
- * revision-fenced `session.mutate`, as Hermes Desktop sends it. The attach only reads; it is let go of afterwards.
+ * revision-fenced `session.mutate`, as Hermes Desktop sends it. The view only reads; it is let go of afterwards,
+ * which leaves other views of the chat alone (`session-views.ts`).
  */
 async function compactOnAuthority(name: string, sessionId: string) {
 	const scope = name === 'default' ? {} : { profile: name }
-	const a = await rpc<Attached>('session.resume', { ...scope, session_id: sessionId, omit_messages: true })
+	const v = await views.view(name, sessionId)
+	const a = v.attached
 	try {
 		if (!a.session_id || typeof a.revision !== 'number')
 			throw new BotError(502, 'Hermes did not open the chat for compacting.')
@@ -378,12 +378,7 @@ async function compactOnAuthority(name: string, sessionId: string) {
 			message: typeof r.message === 'string' ? r.message : null,
 		}
 	} finally {
-		if (a.subscription_id)
-			rpc('session.detach', {
-				...scope,
-				session_id: a.session_id ?? sessionId,
-				subscription_id: a.subscription_id,
-			}).catch(() => {})
+		v.release()
 	}
 }
 

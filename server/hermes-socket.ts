@@ -1,6 +1,7 @@
 import { Elysia } from 'elysia'
 import { getConnection, onConnectionChange } from './config'
 import { relay } from './relay'
+import { createSessionViews } from './session-views'
 
 /**
  * One JSON-RPC socket to Hermes (`/api/ws` on the dashboard), held by the relay. Everything Hermes exposes only
@@ -255,3 +256,6 @@ export const rpcRoutes = new Elysia({ prefix: '/ui-api/rpc' })
 			headers: { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache', 'X-Accel-Buffering': 'no' },
 		})
 	})
+
+/** Views of chats on this socket, counted so that one ending does not end the others (`session-views.ts`). */
+export const views = createSessionViews({ rpc, onEvent: onSocketEvent })
