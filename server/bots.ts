@@ -1,6 +1,7 @@
 import { Elysia } from 'elysia'
 import { randomBytes } from 'node:crypto'
 import { saveState, state } from './store'
+import { botDisplayName } from '../src/lib/bot-name'
 import { relay } from './relay'
 import { broadcast, browsersListening, rpc, RpcError, viewerSupport } from './hermes-socket'
 import { readFace } from './face-color'
@@ -78,13 +79,26 @@ async function dash<T = any>(method: string, path: string, body?: unknown): Prom
 	return data as T
 }
 
-/** Each bot's name as people see it (its title, or its profile name), read at most every few minutes. */
+/** Each bot's name as people see it in the app (`botDisplayName`), read at most every few minutes. */
 let titles: { at: number; map: Map<string, string> } | undefined
 export async function botTitles(): Promise<Map<string, string>> {
 	if (titles && Date.now() - titles.at < 5 * 60_000) return titles.map
 	try {
+		// The dashboard has the profiles' own names; without it, a bot still has its title or a readable name.
+		const [list, dashboard] = await Promise.all([
+			profiles(),
+			dash<{ profiles?: { name: string; bot_title?: string; display_name?: string }[] }>('GET', '/api/profiles').catch(
+				() => ({ profiles: [] }),
+			),
+		])
+		const own = new Map((dashboard.profiles ?? []).map((p) => [p.name, p]))
 		const map = new Map<string, string>()
-		for (const p of await profiles()) map.set(p.name, String(p.ui_meta?.[BOTS_KEY]?.title ?? '').trim() || p.name)
+		for (const p of list) {
+			const isDefault = !!p.is_default || p.name === 'default'
+			const d = own.get(p.name)
+			const title = String(p.ui_meta?.[BOTS_KEY]?.title ?? '') || d?.bot_title
+			map.set(p.name, botDisplayName(isDefault ? 'default' : p.name, title, d?.display_name))
+		}
 		titles = { at: Date.now(), map }
 	} catch {
 		titles ??= { at: 0, map: new Map() }

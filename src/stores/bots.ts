@@ -6,6 +6,7 @@ import { get, patch, post, del, qs } from '@/lib/http'
 import { nearestColor, type BotLook, type BotState } from '@/lib/avatar'
 import { useSessions } from './sessions'
 import { useReadMarks } from './read-marks'
+import { botDisplayName, prettyName } from '@/lib/bot-name'
 import { onResync } from '@/lib/live'
 import { onRpcEvent } from '@/lib/rpc'
 
@@ -85,12 +86,7 @@ function readJson<T>(key: string, fallback: T): T {
 }
 
 /** `inbox-triage` reads as "Inbox Triage", as in Hermes Desktop. */
-export function prettyName(name: string) {
-	return name
-		.replace(/[-_]+/g, ' ')
-		.trim()
-		.replace(/\b\w/g, (c) => c.toUpperCase())
-}
+export { prettyName }
 
 export const useBots = defineStore('bots', () => {
 	const sessions = useSessions()
@@ -111,7 +107,7 @@ export const useBots = defineStore('bots', () => {
 				name: p.name,
 				handle: isDefault ? 'hermes' : p.name,
 				// The same order Hermes Desktop uses, so a bot reads the same in both.
-				displayName: title || p.display_name?.trim() || (isDefault ? 'Hermes' : prettyName(p.name)),
+				displayName: botDisplayName(isDefault ? 'default' : p.name, title, p.display_name),
 				title,
 				description: p.description ?? '',
 				model: p.model ?? '',
