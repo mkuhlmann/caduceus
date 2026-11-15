@@ -38,7 +38,7 @@ Caduceus is only the frontend. Point it at the URLs of a running Hermes gateway 
 - **Webhooks:** manage incoming webhook subscriptions.
 - **Board:** the Hermes kanban board, with drag and drop, task details and comments.
 - **Skills:** turn installed skills on or off, edit and create them, and install from the hub.
-- **Notifications:** your phone or desktop browser can tell you when a bot waits for your approval or answer, a reply is ready, a group chat needs you, or a schedule failed, even while Caduceus is closed. The relay watches Hermes, so nothing has to stay open. Notices can also go to an [ntfy](https://ntfy.sh) topic or a webhook.
+- **Notifications:** your phone or desktop browser can tell you when a bot waits for your approval or answer, a reply is ready, a group chat needs you, or a schedule failed (or, if you turn it on, ran), even while Caduceus is closed. The relay watches Hermes, so nothing has to stay open. Notices can also go to an [ntfy](https://ntfy.sh) topic or a webhook.
 - **Settings:** the model picker, every config section from Hermes' schema, and API keys. Light and dark themes, with two dark colour schemes (Graphite and Lapis), and your messages in a bot's chat can take that bot's colour.
 
 ## How it connects
@@ -229,6 +229,7 @@ The relay watches Hermes on its own whenever a device or a channel wants notices
 - **A bot waits for you** and **a reply is ready**: it asks Hermes every few seconds which chats run and which wait for an answer (`session.active_list`), and reads the streams of chats started in Caduceus. This covers every bot's Bot Chat and the chats you started here, not chats on other channels such as Telegram.
 - **A group chat needs you**: a bot wrote `@user`, or a command waits for approval.
 - **A schedule failed**: a job's last run ended in an error.
+- **A schedule ran** (off unless you turn it on): a job finished, with the start of what it produced.
 
 Nothing notifies you about the chat you are looking at. While you use Caduceus on one device, the others stay quiet, unless you turn that off. Reading a chat on one device closes its notifications on the others (except on Apple devices, where they close when you open the app). The relay keeps its push key in `state.json`; if that file is lost, every device has to turn notifications on again.
 

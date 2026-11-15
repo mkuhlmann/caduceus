@@ -12,7 +12,7 @@
 import { Type, type Static } from '@sinclair/typebox'
 import { withoutDefaults } from './schema'
 
-export const EVENT_KINDS = ['waiting', 'reply', 'room', 'schedule'] as const
+export const EVENT_KINDS = ['waiting', 'reply', 'room', 'schedule', 'scheduleRan'] as const
 export type EventKind = (typeof EVENT_KINDS)[number]
 
 export const EVENT_LABELS: Record<EventKind, { label: string; hint: string }> = {
@@ -20,6 +20,10 @@ export const EVENT_LABELS: Record<EventKind, { label: string; hint: string }> = 
 	reply: { label: 'A reply is ready', hint: "A bot's chat, or a chat you started here, finished its turn." },
 	room: { label: 'A group chat needs you', hint: 'A bot hands something to you with @user, or asks for an approval.' },
 	schedule: { label: 'A schedule failed', hint: "A scheduled job's last run ended in an error." },
+	scheduleRan: {
+		label: 'A schedule ran',
+		hint: 'A scheduled job finished, with the start of what it produced. Off at first: schedules may run often.',
+	},
 }
 
 export type Notice = {
@@ -54,6 +58,7 @@ export const NotifySettingsSchema = Type.Object(
 				reply: Type.Boolean({ default: true }),
 				room: Type.Boolean({ default: true }),
 				schedule: Type.Boolean({ default: true }),
+				scheduleRan: Type.Boolean({ default: false }),
 			},
 			{ additionalProperties: false, default: {} },
 		),
@@ -193,15 +198,24 @@ export type JobLike = {
 export const runFailed = (status: string | null | undefined) =>
 	!!status && (status === 'error' || status.includes('fail'))
 
-/** Jobs whose last run is new since the last look and failed. The first look only learns the runs. */
-export function failedRuns(
+/**
+ * Jobs whose last run is new since the last look: those that failed, and those that went well (`ok`). A run still
+ * delivering (`delivery_queued`) is news only once it settles, and one stopped by hand is none. The first look only
+ * learns the runs.
+ */
+export function finishedRuns(
 	before: Record<string, string> | undefined,
 	jobs: readonly JobLike[],
-): { seen: Record<string, string>; failed: JobLike[] } {
+): { seen: Record<string, string>; failed: JobLike[]; ran: JobLike[] } {
 	const seen: Record<string, string> = {}
 	for (const j of jobs) seen[j.id] = `${j.last_run_at ?? ''}|${j.last_status ?? ''}`
-	if (!before) return { seen, failed: [] }
-	return { seen, failed: jobs.filter((j) => j.last_run_at && seen[j.id] !== before[j.id] && runFailed(j.last_status)) }
+	if (!before) return { seen, failed: [], ran: [] }
+	const fresh = jobs.filter((j) => j.last_run_at && seen[j.id] !== before[j.id])
+	return {
+		seen,
+		failed: fresh.filter((j) => runFailed(j.last_status)),
+		ran: fresh.filter((j) => j.last_status === 'ok'),
+	}
 }
 
 // ── Who is told ──────────────────────────────────────────────────────────────────────────────────

@@ -2,7 +2,7 @@ import { expect, test } from 'bun:test'
 import { Value } from '@sinclair/typebox/value'
 import {
 	audience,
-	failedRuns,
+	finishedRuns,
 	liveChanges,
 	NotifyPatchSchema,
 	preview,
@@ -58,15 +58,27 @@ test("a room's pending approval comes first and is keyed by its turn", () => {
 
 test('a failed run is news when it is new', () => {
 	const jobs = [{ id: 'j', name: 'Backup', last_run_at: '2026-11-14T10:00:00', last_status: 'ok' }]
-	const first = failedRuns(undefined, jobs)
+	const first = finishedRuns(undefined, jobs)
 	expect(first.failed).toEqual([])
 	const failed = [{ ...jobs[0]!, last_run_at: '2026-11-15T10:00:00', last_status: 'error' }]
-	const second = failedRuns(first.seen, failed)
+	const second = finishedRuns(first.seen, failed)
 	expect(second.failed.map((j) => j.id)).toEqual(['j'])
-	expect(failedRuns(second.seen, failed).failed).toEqual([])
+	expect(finishedRuns(second.seen, failed).failed).toEqual([])
 	// A stop by hand is no failure; a delivery that failed is.
-	expect(failedRuns(first.seen, [{ ...failed[0]!, last_status: 'cancelled' }]).failed).toEqual([])
-	expect(failedRuns(first.seen, [{ ...failed[0]!, last_status: 'delivery_failed' }]).failed).toHaveLength(1)
+	expect(finishedRuns(first.seen, [{ ...failed[0]!, last_status: 'cancelled' }]).failed).toEqual([])
+	expect(finishedRuns(first.seen, [{ ...failed[0]!, last_status: 'delivery_failed' }]).failed).toHaveLength(1)
+})
+
+test('a run that went well is news once it has settled, so a delivery still queued is not told twice', () => {
+	const job = { id: 'j', name: 'Backup', last_run_at: '2026-11-14T10:00:00', last_status: 'ok' }
+	const first = finishedRuns(undefined, [job])
+	const queued = finishedRuns(first.seen, [
+		{ ...job, last_run_at: '2026-11-15T10:00:00', last_status: 'delivery_queued' },
+	])
+	expect(queued.ran).toEqual([])
+	const settled = finishedRuns(queued.seen, [{ ...job, last_run_at: '2026-11-15T10:00:00', last_status: 'ok' }])
+	expect(settled.ran.map((j) => j.id)).toEqual(['j'])
+	expect(settled.failed).toEqual([])
 })
 
 test('routes and tags name the same chats', () => {

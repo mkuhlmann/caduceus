@@ -63,7 +63,8 @@ test("older versions' files are moved into the two files, then deleted", () => {
 	const { config, state } = load(dir)
 	expect(config.preferences.voiceSubmit).toBe('send')
 	expect(config.notifications).toEqual({
-		events: { waiting: true, reply: false, room: true, schedule: true },
+		// A kind of notice older versions did not have starts off.
+		events: { waiting: true, reply: false, room: true, schedule: true, scheduleRan: false },
 		quietWhileActive: false,
 		channels: [{ kind: 'webhook', url: 'https://x.test/h' }],
 	})

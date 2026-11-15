@@ -8,7 +8,7 @@ import {
 	BOT_CHAT,
 	botNotice,
 	chatNotice,
-	failedRuns,
+	finishedRuns,
 	liveChanges,
 	preview,
 	roomAsk,
@@ -27,7 +27,8 @@ import {
  *   and their end on their own stream (`runs.ts`). Only Bot Chats and chats started here count; a Telegram chat or a
  *   schedule's run is answered where it runs.
  * - **A room needs you**: Hermes pushes `groups.changed` naming the rooms that moved; a slow look covers the rest.
- * - **A schedule failed**: Hermes pushes `cron.changed` when its jobs file moves; a slow look covers bots' jobs.
+ * - **A schedule failed or ran**: Hermes pushes `cron.changed` when its jobs file moves; a slow look covers bots'
+ *   jobs. A run that went well is told only if you asked (`scheduleRan`), with the start of what it produced.
  *
  * The first look at anything only learns how it stands, so a restart does not repeat old news.
  */
@@ -40,6 +41,15 @@ const gwBase = (profile: string) => (profile === 'default' ? '' : `/p/${encodeUR
 
 async function gw<T>(path: string): Promise<T> {
 	const res = await relay('gw', path.replace(/\?.*/, ''), new Request('http://relay' + path))
+	if (!res.ok) {
+		await res.body?.cancel()
+		throw new Error(`Hermes answered ${res.status}`)
+	}
+	return (await res.json()) as T
+}
+
+async function dash<T>(path: string): Promise<T> {
+	const res = await relay('dash', path.replace(/\?.*/, ''), new Request('http://relay' + path))
 	if (!res.ok) {
 		await res.body?.cancel()
 		throw new Error(`Hermes answered ${res.status}`)
@@ -244,8 +254,29 @@ async function lookAtRooms(ids?: string[]) {
 
 const jobsSeen = new Map<string, Record<string, string>>()
 
+/**
+ * What a job's newest run produced: an agent run's last reply, or the start of a script's output (Hermes serves only
+ * its first 180 characters, after a header that ends in `---`).
+ */
+async function runOutput(jobId: string, profile: string): Promise<string> {
+	try {
+		const scope = profile === 'default' ? '' : `&profile=${encodeURIComponent(profile)}`
+		const r = await dash<{ runs?: { id?: string; source?: string; preview?: string }[] }>(
+			`/api/cron/jobs/${encodeURIComponent(jobId)}/runs?limit=1${scope}`,
+		)
+		const run = r.runs?.[0]
+		if (run?.source === 'cron_output') {
+			const text = String(run.preview ?? '')
+			return text.startsWith('# Cron Job:') ? text.slice(text.indexOf('---') + 3).trim() : text
+		}
+		return run?.id ? await lastReply(run.id, profile) : ''
+	} catch {
+		return ''
+	}
+}
+
 async function lookAtSchedules() {
-	if (!wanted('schedule')) return void jobsSeen.clear()
+	if (!wanted('schedule') && !wanted('scheduleRan')) return void jobsSeen.clear()
 	for (const profile of ['default', ...connectedBots()]) {
 		let jobs: JobLike[]
 		try {
@@ -253,14 +284,27 @@ async function lookAtSchedules() {
 		} catch {
 			continue
 		}
-		const { seen, failed } = failedRuns(jobsSeen.get(profile), jobs)
+		const { seen, failed, ran } = finishedRuns(jobsSeen.get(profile), jobs)
 		jobsSeen.set(profile, seen)
+		const where = profile === 'default' ? '/schedules' : botNotice(profile).route
+		if (wanted('scheduleRan'))
+			for (const j of ran) {
+				const bot = profile === 'default' ? '' : `${await nameOf(profile)}: `
+				const output = preview(await runOutput(j.id, profile))
+				await notify({
+					kind: 'scheduleRan',
+					tag: `schedule:${profile}:${j.id}`,
+					route: where,
+					title: `Schedule ran: ${j.name || 'Unnamed schedule'}`,
+					body: bot + (output || 'Its run finished.'),
+				})
+			}
 		for (const j of failed) {
 			const bot = profile === 'default' ? '' : `${await nameOf(profile)}: `
 			await notify({
 				kind: 'schedule',
 				tag: `schedule:${profile}:${j.id}`,
-				route: profile === 'default' ? '/schedules' : botNotice(profile).route,
+				route: where,
 				title: `Schedule failed: ${j.name || 'Unnamed schedule'}`,
 				body: bot + (j.last_error ? preview(j.last_error, 160) : 'Its last run ended in an error.'),
 			})
