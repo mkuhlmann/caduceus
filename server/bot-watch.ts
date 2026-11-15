@@ -1,6 +1,10 @@
 import { Elysia } from 'elysia'
 import { onSocketEvent, rpc, RpcError, viewerSupport, views, type SocketEvent } from './hermes-socket'
 import type { View } from './session-views'
+import { relay } from './relay'
+import { onChatStream } from './runs'
+import { config } from './store'
+import { BOT_CHAT } from '../src/lib/notifications'
 
 /**
  * A bot's Bot Chat runs in the bot's own queue inside the gateway, and its chat stream reports nothing until the
@@ -33,6 +37,48 @@ const TURN = new Set([
 
 // Hermes' own profile is the gateway's launch profile: it is addressed by naming none.
 const scope = (name: string) => (name === 'default' ? {} : { profile: name })
+
+/**
+ * Hermes asks a Bot Chat's question only while a viewer that can answer it is attached; with none, it skips the
+ * question at once and the bot carries on without an answer. With `waitForAnswers` on, the relay views the chat itself
+ * while a turn sent from Caduceus runs, so the question waits until you open the chat on any device and answer it
+ * (a "waiting" notice tells you, when notifications are on). Its view counts like a browser's (`session-views.ts`).
+ */
+const held = new Map<string, Promise<View | null>[]>()
+const botChats = new Map<string, boolean>()
+
+async function isBotChat(profile: string, sessionId: string) {
+	const known = botChats.get(sessionId)
+	if (known !== undefined) return known
+	const path = `${profile === 'default' ? '' : `/p/${encodeURIComponent(profile)}`}/api/sessions/${encodeURIComponent(sessionId)}`
+	const res = await relay('gw', path, new Request('http://relay' + path))
+	if (!res.ok) {
+		await res.body?.cancel()
+		return false
+	}
+	const r = (await res.json()) as { session?: { title?: string | null }; title?: string | null }
+	const yes = (r.session ?? r).title === BOT_CHAT
+	botChats.set(sessionId, yes)
+	return yes
+}
+
+async function holdBotChat(profile: string, sessionId: string): Promise<View | null> {
+	if (!(await viewerSupport()) || !(await isBotChat(profile, sessionId))) return null
+	return views.view(profile, sessionId)
+}
+
+onChatStream((news) => {
+	const key = `${news.profile}\0${news.sessionId}`
+	if (news.type === 'started') {
+		if (!config.preferences.waitForAnswers) return
+		held.set(key, [...(held.get(key) ?? []), holdBotChat(news.profile, news.sessionId).catch(() => null)])
+	} else if (news.type === 'finished') {
+		const list = held.get(key)
+		const first = list?.shift()
+		if (list && !list.length) held.delete(key)
+		void first?.then((v) => v?.release())
+	}
+})
 
 export const botWatchRoutes = new Elysia({ prefix: '/ui-api/bots' })
 	.get('/:name/watch', async ({ params, query, request, set }) => {

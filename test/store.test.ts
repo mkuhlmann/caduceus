@@ -28,7 +28,12 @@ const put = (dir: string, name: string, v: unknown) => writeFileSync(join(dir, n
 
 test('an empty folder starts with every default', () => {
 	const { config, state } = load(fresh())
-	expect(config.preferences).toEqual({ voiceSubmit: 'fill', tintMessages: true, runStats: false })
+	expect(config.preferences).toEqual({
+		voiceSubmit: 'fill',
+		tintMessages: true,
+		runStats: false,
+		waitForAnswers: false,
+	})
 	expect(config.notifications.events.reply).toBe(true)
 	expect(config.connection.gatewayUrl).toBe('')
 	expect(state).toMatchObject({ readMarks: { bots: {}, rooms: {} }, projects: [], bots: {}, push: { devices: [] } })
@@ -37,7 +42,12 @@ test('an empty folder starts with every default', () => {
 test('fields missing from a file get their defaults; fields no version knows are dropped', () => {
 	const dir = fresh()
 	put(dir, 'config.json', { preferences: { runStats: true, gone: 1 } })
-	expect(load(dir).config.preferences).toEqual({ voiceSubmit: 'fill', tintMessages: true, runStats: true })
+	expect(load(dir).config.preferences).toEqual({
+		voiceSubmit: 'fill',
+		tintMessages: true,
+		runStats: true,
+		waitForAnswers: false,
+	})
 })
 
 test('a file that does not fit stops the start and says where', () => {

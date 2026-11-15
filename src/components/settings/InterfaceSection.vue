@@ -17,7 +17,7 @@ async function setVoiceSubmit(v: Preferences['voiceSubmit']) {
 }
 
 /** A switch shows its new state at once; only a refusal from the server is worth a toast. */
-async function toggle(key: 'tintMessages' | 'runStats', v: boolean, what: string) {
+async function toggle(key: 'tintMessages' | 'runStats' | 'waitForAnswers', v: boolean, what: string) {
 	try {
 		await preferences.set(key, v)
 	} catch (e) {
@@ -70,6 +70,20 @@ async function toggle(key: 'tintMessages' | 'runStats', v: boolean, what: string
 		<p class="mt-1 text-sm text-ink-2">
 			After a reply, show how fast the model read the prompt (pp/s) and wrote its answer (tg/s), and how long the whole
 			turn took. Saved on the Caduceus server, so it applies on all your devices.
+		</p>
+
+		<div class="mt-6 flex items-center gap-3">
+			<ToggleSwitch
+				:model-value="preferences.prefs.waitForAnswers"
+				label="Bots wait for my answers"
+				@update:model-value="toggle('waitForAnswers', $event, 'the answer setting')"
+			/>
+			<span class="text-sm font-medium">Bots wait for my answers</span>
+		</div>
+		<p class="mt-1 text-sm text-ink-2">
+			When a bot asks you something in its chat while no device shows that chat, Caduceus keeps the question open until
+			you answer it. Off, the bot goes on without an answer. Applies to messages you send from Caduceus. Saved on the
+			Caduceus server, so it applies on all your devices.
 		</p>
 
 		<label class="label mt-6" for="ui-start">Start page</label>
