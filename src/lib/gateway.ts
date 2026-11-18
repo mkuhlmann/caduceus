@@ -143,8 +143,8 @@ export type ChatEvent =
 	| { type: 'tool.completed'; tool: string; preview?: string; failed: boolean }
 	| { type: 'approval.request'; request: ApprovalRequest }
 	| { type: 'assistant.completed'; content: string }
-	| { type: 'run.finished'; status: 'completed' | 'failed' | 'cancelled'; usage?: any; error?: string }
-	| { type: 'error'; message: string }
+	| { type: 'run.finished'; status: 'completed' | 'failed' | 'cancelled'; usage?: any; error?: string; code?: string }
+	| { type: 'error'; message: string; code?: string }
 	| { type: 'status'; text: string }
 
 /**
@@ -325,16 +325,23 @@ async function* chatEvents(res: Response, opts: ChatStreamOpts): AsyncGenerator<
 					status: name.slice(4) as 'completed' | 'failed' | 'cancelled',
 					usage: d.usage,
 					error: d.error?.message ?? d.error,
+					...errorCode(d),
 				}
 				break
 			case 'hermes.status':
 				if (d.text) yield { type: 'status', text: d.text }
 				break
 			case 'error':
-				yield { type: 'error', message: d.message ?? 'The run failed.' }
+				yield { type: 'error', message: d.message ?? 'The run failed.', ...errorCode(d) }
 				break
 		}
 	}
+}
+
+/** The code a failed run or stream error carries, such as Hermes refusing a message typed into a schedule's chat. */
+function errorCode(d: any): { code?: string } {
+	const code = d?.code ?? d?.error?.code ?? d?.error_surface?.code
+	return typeof code === 'string' && code ? { code } : {}
 }
 
 /**

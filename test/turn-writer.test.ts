@@ -64,6 +64,15 @@ describe('the chat stream of a turn sent from here', () => {
 		expect(w.turn.error).toBe('Stream closed')
 	})
 
+	test("a refusal keeps Hermes' code, so the chat can offer what to do instead", () => {
+		const w = new TurnWriter(fresh())
+		w.applyChat({ type: 'run.finished', status: 'failed', error: 'Read only', code: 'cron_session_read_only' })
+		expect(w.turn.errorCode).toBe('cron_session_read_only')
+		const s = new TurnWriter(fresh())
+		s.applyChat({ type: 'error', message: 'Read only', code: 'cron_session_read_only' })
+		expect(s.turn.errorCode).toBe('cron_session_read_only')
+	})
+
 	test('status lines are for whoever shows the turn', () => {
 		expect(new TurnWriter(fresh()).applyChat({ type: 'status', text: 'Compacting' })).toEqual({ status: 'Compacting' })
 	})

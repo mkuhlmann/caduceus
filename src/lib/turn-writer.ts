@@ -153,11 +153,15 @@ export class TurnWriter {
 				return { status: ev.text }
 			case 'run.finished':
 				this.flush()
-				if (ev.status === 'failed') this.turn.error = ev.error || 'The run failed.'
+				if (ev.status === 'failed') {
+					this.turn.error = ev.error || 'The run failed.'
+					if (ev.code) this.turn.errorCode = ev.code
+				}
 				return { complete: true }
 			case 'error':
 				this.flush()
 				this.turn.error = ev.message
+				if (ev.code) this.turn.errorCode = ev.code
 				return {}
 			case 'run.started':
 				this.flush()
@@ -241,7 +245,11 @@ export class TurnWriter {
 				return {}
 			case 'message.complete':
 				this.flush()
-				if (p.status === 'error' && typeof p.error === 'string' && p.error) this.turn.error = p.error
+				if (p.status === 'error' && typeof p.error === 'string' && p.error) {
+					this.turn.error = p.error
+					const code = p.error_surface?.code
+					if (typeof code === 'string' && code) this.turn.errorCode = code
+				}
 				return { complete: true }
 			case 'session.replay_gap':
 				return { gap: true }

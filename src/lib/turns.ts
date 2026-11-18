@@ -52,6 +52,8 @@ export type AgentTurn = {
 	at?: number
 	live?: boolean
 	error?: string
+	/** What kind of failure `error` is, when Hermes says (`cron_session_read_only`, ...). */
+	errorCode?: string
 }
 export type Turn = UserTurn | AgentTurn
 
