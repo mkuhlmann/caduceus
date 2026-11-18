@@ -15,6 +15,9 @@
  *   - A message streams a reply with a tool call, saved to the chat as it goes, as Hermes does.
  *   - "approve" in a message makes the run ask for an approval; it waits until it is answered.
  *   - "drop" in a message breaks the connection once mid-reply, so the browser has to rejoin the stream.
+ *   - Schedule runs (#/chat/cron-contest, #/chat/cron-digest) refuse messages as Hermes does
+ *     (`cron_session_read_only`). The first is known as a schedule's and replies go to a chat for its job; the second
+ *     is listed under another source, so only the refusal tells, and the chat offers to send it as a reply.
  *   - In a Bot Chat the chat stream says nothing until the end; the turn streams on the bot's watch instead.
  *   - Scout's Bot Chat runs elsewhere and waits for an approval, until it is answered from here.
  *   - curl -X POST 'localhost:7899/ui-api/mock/elsewhere?bot=ops'   a Bot Chat turn from another device, asking
@@ -183,6 +186,19 @@ const transcripts: Record<string, Msg[]> = {
 	'bot-inbox': [say(ago(180), 'Sorted 46 emails. Three need you today.')],
 	'bot-ledger': [say(ago(60 * 26), 'The October budget is closed. You stayed 4% under.')],
 	'bot-chef': [say(ago(60 * 50), "This week's plan is ready.")],
+	// Runs of schedules. Hermes refuses a message typed into one (see `scheduleRefusal` below).
+	'cron-contest': [
+		user(ago(75), 'Check the photo contest page for new rules and draft our entry email.'),
+		...call(ago(74), 'browser_navigate', { url: 'https://contest.example.com/rules' }, 'Rules page loaded'),
+		say(
+			ago(70),
+			'The rules changed since last week: entries now need **a short caption** (at most 200 characters) and close on **Friday at 18:00**.\n\nI drafted the entry email to entries@contest.example.com with the harbour photo and this caption:\n\n> Morning fog over the old harbour, five minutes before the ferry.\n\nShould I send it?',
+		),
+	],
+	'cron-digest': [
+		user(ago(60 * 26 + 5), 'Summarise the week in my reading list.'),
+		say(ago(60 * 26), 'Seven new articles this week. The two worth your time are about heat pumps and home batteries.'),
+	],
 	'chat-disk': [
 		user(ago(40), 'The media server says /srv is almost full. Can you find out what is taking the space?'),
 		...call(ago(39), 'terminal', { command: 'df -h /srv' }, '/dev/sdb1  2.9T  2.7T  150G  95% /srv'),
@@ -246,6 +262,9 @@ const chats = [
 	chat('chat-post', 'Draft a post about home automation', 60 * 27),
 	chat('chat-meal', 'Weekly meal plan', 60 * 24 * 3, 'matrix'),
 	chat('chat-tls', 'Renew TLS certificates', 60 * 24 * 5),
+	chat('cron-contest', 'Photo contest check · Nov 18 09:00', 70, 'cron'),
+	// A schedule's run Hermes lists under another source: only its refusal tells (the fallback).
+	chat('cron-digest', 'Reading list digest · Nov 17 08:00', 60 * 26, 'local'),
 ]
 
 // Group chat
@@ -382,7 +401,7 @@ function sessionsFor(profile: string, url: URL) {
 		const s = botChats[profile]
 		return json({ data: s && (!title || title === s.title) ? [s] : [], has_more: false })
 	}
-	return json({ data: title ? [] : chats, has_more: false })
+	return json({ data: title ? chats.filter((c) => c.title === title) : chats, has_more: false })
 }
 
 function rpc(method: string, params: any) {
@@ -683,8 +702,33 @@ async function plainRun(id: string, text: string, st: Stream, runId: string) {
 }
 
 let runs = 0
+let created = 0
 async function scenario(req: Request, url: URL, p: string): Promise<Response | undefined> {
+	if (p === 'gw/api/sessions' && req.method === 'POST') {
+		const body: any = await req.json()
+		if (body.title && chats.some((c) => c.title === body.title))
+			return json({ error: { message: 'Title already in use', code: 'title_conflict' } }, 409)
+		const s = chat(`chat-new-${++created}`, body.title ?? '', 0)
+		chats.unshift(s)
+		transcripts[s.id] = []
+		console.log('chat created', s.id, s.title)
+		return json({ session: s })
+	}
 	let m = /^gw(?:\/p\/[^/]+)?\/api\/sessions\/([^/]+)\/chat\/stream$/.exec(p)
+	if (m && req.method === 'POST' && m[1]!.startsWith('cron-')) {
+		// A schedule's chat only runs its job: Hermes refuses anything typed into it.
+		console.log('refused: schedule chat', m[1])
+		return json(
+			{
+				error: {
+					message:
+						'This chat belongs to a scheduled job and only runs that job, so your message was not run. Start a new chat to send it.',
+					code: 'cron_session_read_only',
+				},
+			},
+			409,
+		)
+	}
 	if (m && req.method === 'POST') {
 		const id = decodeURIComponent(m[1]!)
 		const body: any = await req.json()
