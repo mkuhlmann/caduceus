@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { PanelLeft, GitFork, Settings2, CalendarClock } from 'lucide-vue-next'
+import { PanelLeft, GitFork, Settings2, CalendarClock, Reply } from 'lucide-vue-next'
 import { useSessions, sourceLabel } from '@/stores/sessions'
 import { useBots } from '@/stores/bots'
 import { useProjects, PROJECT_COLORS } from '@/stores/projects'
@@ -28,6 +28,7 @@ import { mentionNote, parseBotNotice, parseSystemNotice, resolveMentions, stripM
 import { COLORS, STATE_LABELS, eyesAreDark, messageFill, resolveLook } from '@/lib/avatar'
 import { connectBot, reconnectBot } from '@/components/bots/connect'
 import { ApiError } from '@/lib/http'
+import { isScheduleChat, needsJobLookup, replyChatTitle, scheduleJobName } from '@/lib/schedule-reply'
 
 const route = useRoute()
 const router = useRouter()
@@ -101,6 +102,16 @@ function retryRefresh() {
 const foreign = computed(
 	() => !botName.value && session.value?.source && !['api_server'].includes(session.value.source),
 )
+// A schedule's chat only runs its job: what is written here goes to a reply chat for the job (a bot's go to its
+// Bot Chat), with what the run produced.
+const scheduleChat = computed(() => isScheduleChat(session.value))
+const replyGoesTo = computed(() => {
+	if (bot.value) return `${bot.value.displayName}'s Bot Chat`
+	const title = session.value?.title
+	return needsJobLookup(title) ? 'a reply chat for this job' : `“${replyChatTitle(scheduleJobName(title))}”`
+})
+// A message Hermes refused here because the chat turned out to belong to a schedule.
+const refusal = computed(() => (id.value ? sessions.refused[id.value] : undefined))
 const statsOf = (turnKey: string) =>
 	preferences.prefs.runStats && id.value ? sessions.statsFor(id.value, turnKey) : undefined
 // The face beside a reply is alive only on the newest one; earlier replies show it still.
@@ -253,6 +264,7 @@ async function send(text: string, images: string[]) {
 		}
 		return
 	}
+	if (id.value && scheduleChat.value && !running.value) return replyToSchedule(id.value, text, images)
 	let target = id.value
 	if (!target && botName.value) {
 		creating.value = true
@@ -285,6 +297,40 @@ async function send(text: string, images: string[]) {
 	// Tagging other bots gets Desktop's identification note, so this bot knows exactly whom it should contact.
 	const note = mentionNote(resolveMentions(text, bots.bots, activeProfile.value))
 	sessions.send(target, text + note, images)
+}
+
+/**
+ * Send a reply to a schedule's run where it can run: the job's reply chat (started the first time), or for a bot's
+ * run its Bot Chat. The first reply about a run carries the run's output; the chat opens to show the answer.
+ */
+async function replyToSchedule(runId: string, text: string, images: string[]) {
+	creating.value = true
+	try {
+		let target: string
+		let to: string
+		let done: string
+		if (botName.value) {
+			target = await startBotChat(botName.value)
+			to = `${botBase.value}/${encodeURIComponent(botName.value)}`
+			done = `Reply sent in ${bot.value?.displayName ?? botName.value}'s Bot Chat`
+		} else {
+			const { chat, created } = await sessions.scheduleReplyChat(runId)
+			target = chat.id
+			to = `/chat/${encodeURIComponent(chat.id)}`
+			done = created ? `Reply sent in a new chat, “${chat.title}”` : `Reply sent in “${chat.title}”`
+		}
+		const message = await sessions.scheduleReplyText(runId, target, text)
+		sessions.dismissRefusal(runId)
+		await router.push(to)
+		stickToBottom = true
+		void sessions.send(target, message, images)
+		toasts.push(done)
+	} catch (e) {
+		toasts.error(`Could not send your reply: ${(e as Error).message}. Your message is back in the box; try again.`)
+		composer.value?.restore(text, images)
+	} finally {
+		creating.value = false
+	}
 }
 
 async function continueInCopy() {
@@ -641,7 +687,24 @@ async function connectThisBot() {
 							/>
 						</template>
 					</div>
-					<p v-if="lastError && !sending" class="mt-3 max-w-[72ch] rounded-md bg-rose-soft px-3 py-2 text-sm">
+					<div
+						v-if="refusal && !sending"
+						class="mt-3 flex max-w-[72ch] flex-wrap items-center justify-between gap-2 rounded-lg bg-surface-2 px-3 py-2 text-sm text-ink-2"
+						role="status"
+					>
+						<span>Hermes did not run your message: this chat belongs to a schedule and only runs its job.</span>
+						<span class="flex gap-1">
+							<button class="btn-ghost h-7" @click="id && sessions.dismissRefusal(id)">Dismiss</button>
+							<button
+								class="btn-outline h-7"
+								:disabled="creating"
+								@click="id && replyToSchedule(id, refusal.text, refusal.images)"
+							>
+								<Reply :size="14" /> Send as a reply
+							</button>
+						</span>
+					</div>
+					<p v-else-if="lastError && !sending" class="mt-3 max-w-[72ch] rounded-md bg-rose-soft px-3 py-2 text-sm">
 						{{ lastError }}
 					</p>
 				</div>
@@ -649,7 +712,17 @@ async function connectThisBot() {
 
 			<div class="mx-auto w-full max-w-4xl px-3 pb-3 md:px-8 md:pb-5">
 				<div
-					v-if="foreign && !run"
+					v-if="scheduleChat && !run"
+					class="mb-2 flex items-start gap-2 rounded-lg bg-surface-2 px-3 py-2 text-sm text-ink-2"
+				>
+					<CalendarClock :size="16" class="mt-0.5 shrink-0 text-ink-3" />
+					<span
+						>This chat belongs to a schedule and only runs its job. What you write goes to {{ replyGoesTo }}, with what
+						this run produced.</span
+					>
+				</div>
+				<div
+					v-else-if="foreign && !run"
 					class="mb-2 flex flex-wrap items-center justify-between gap-2 rounded-lg bg-surface-2 px-3 py-2 text-sm text-ink-2"
 				>
 					<span
@@ -669,9 +742,11 @@ async function connectThisBot() {
 							? 'Connect the gateway API to chat'
 							: running
 								? `Redirect ${bot?.displayName ?? 'Hermes'}`
-								: bot
-									? `Message ${bot.displayName}`
-									: undefined
+								: scheduleChat
+									? 'Reply to this run'
+									: bot
+										? `Message ${bot.displayName}`
+										: undefined
 					"
 					autofocus
 					:mentions="bots.bots"

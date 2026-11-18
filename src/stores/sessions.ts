@@ -39,6 +39,17 @@ import { onResync } from '@/lib/live'
 import { poller, type Poller } from '@/lib/poller'
 import { watchBotChat, type BotChatWatch, type WatchEvent } from '@/lib/bot-watch'
 import { post } from '@/lib/http'
+import { dateTime } from '@/lib/time'
+import {
+	SCHEDULE_REFUSAL,
+	hasRunContext,
+	isScheduleChat,
+	needsJobLookup,
+	replyChatTitle,
+	runOutput,
+	scheduleJobName,
+	withRunContext,
+} from '@/lib/schedule-reply'
 import { TurnWriter } from '@/lib/turn-writer'
 import { counters, RunClock, savedStats, saveStats, turnStats, turnTokens, type RunStats } from '@/lib/run-stats'
 import type { BotState } from '@/lib/avatar'
@@ -239,6 +250,8 @@ export const useSessions = defineStore('sessions', () => {
 	const activeRuns = ref<Record<string, string>>({})
 	// Bots' conversations: kept apart so they never show up among Hermes' own chats.
 	const botSessions = reactive<Record<string, Session>>({})
+	// Messages Hermes refused because their chat belongs to a schedule, kept so they can go to a reply chat instead.
+	const refused = reactive<Record<string, { text: string; images: string[] }>>({})
 	// Speed of replies streamed in this browser, by `<session>:<turn key>`.
 	const runStats = shallowRef<Record<string, RunStats>>(savedStats())
 
@@ -575,6 +588,7 @@ export const useSessions = defineStore('sessions', () => {
 			}
 			return
 		}
+		delete refused[id]
 		const payload =
 			images.length > 0
 				? [{ type: 'text', text }, ...images.map((url) => ({ type: 'image_url', image_url: { url } }))]
@@ -707,6 +721,7 @@ export const useSessions = defineStore('sessions', () => {
 			if (err.name === 'StreamLost' || (streamKey && err.name !== 'AbortError' && (err.status === 404 || dropped(e))))
 				lost = true
 			else if (err.name !== 'AbortError') {
+				if (err.code) turn.errorCode = err.code
 				turn.error =
 					err.status === 409 && err.code === 'permission_denied'
 						? 'This conversation belongs to another channel and cannot be continued from here. Start a copy to keep going.'
@@ -722,7 +737,10 @@ export const useSessions = defineStore('sessions', () => {
 			const timing = clock?.finish()
 			// Read off saved steps, the turn has no timing of its own to split into reading and writing.
 			if (timing && !streamed) timing.promptMs = timing.genMs = timing.toolMs = undefined
-			const failed = turn.error
+			// A chat that belongs to a schedule only runs its job: the message can go to a reply chat instead.
+			const refusal = turn.errorCode === SCHEDULE_REFUSAL
+			if (refusal) refused[id] = { text, images }
+			const failed = refusal ? 'Hermes did not run this message: this chat belongs to a schedule.' : turn.error
 			// A load that started before the run ended would miss its last messages.
 			await inflight.get(id)
 			await loadMessages(id, { quiet: lost })
@@ -1079,6 +1097,60 @@ export const useSessions = defineStore('sessions', () => {
 		void forgetTranscript(id)
 	}
 
+	/** A schedule's run: its chat, and the job it belongs to by name. */
+	async function scheduleRun(runId: string) {
+		const run = byId(runId) ?? (await gateway.session(runId).catch(() => undefined))
+		const jobs = needsJobLookup(run?.title) ? await gateway.jobs().catch(() => []) : []
+		return { run, jobName: scheduleJobName(run?.title, jobs) }
+	}
+
+	/**
+	 * The chat replies to a schedule's runs go to: a plain chat named after the job, one per job. Hermes keeps titles
+	 * unique, so the one already there is found by its title; one archived comes back to the chat list.
+	 */
+	async function scheduleReplyChat(runId: string): Promise<{ chat: Session; created: boolean }> {
+		const { jobName } = await scheduleRun(runId)
+		const title = replyChatTitle(jobName)
+		const found = (await gateway.sessions({ title, include_hidden: true, limit: 50 })).data.find(
+			(s) => s.title === title && !isScheduleChat(s),
+		)
+		if (found) {
+			if (found.archived) {
+				await gateway.updateSession(found.id, { archived: false })
+				found.archived = false
+			}
+			place(found)
+			return { chat: found, created: false }
+		}
+		const chat = await gateway.createSession({ title })
+		list.value.unshift(chat)
+		messages[chat.id] = []
+		return { chat, created: true }
+	}
+
+	/**
+	 * A reply to a schedule's run as it goes to `chatId`. The first one about that run carries which job and run it
+	 * answers and what the run produced, read from the run's transcript; later ones go as written.
+	 */
+	async function scheduleReplyText(runId: string, chatId: string, text: string): Promise<string> {
+		await Promise.all([
+			messages[runId] ? undefined : loadMessages(runId, { quiet: true }),
+			loadMessages(chatId, { quiet: true }),
+		])
+		const said = (messages[chatId] ?? []).filter((m) => m.role === 'user').map((m) => contentText(m.content))
+		if (hasRunContext(said, runId)) return text
+		const { run, jobName } = await scheduleRun(runId)
+		const ms = messages[runId] ?? []
+		const lastSaid = [...ms].reverse().find((m) => m.role === 'assistant' && m.timestamp)?.timestamp
+		const ranAt = dateTime(lastSaid ?? run?.ended_at ?? run?.last_active ?? run?.started_at)
+		return withRunContext({ jobName, ranAt: ranAt || undefined, runChatId: runId, output: runOutput(ms) }, text)
+	}
+
+	/** Forget a refused message, once it went to a reply chat or was let go. */
+	function dismissRefusal(id: string) {
+		delete refused[id]
+	}
+
 	async function fork(id: string) {
 		const s = await gateway.forkSession(id)
 		list.value.unshift(s)
@@ -1103,6 +1175,7 @@ export const useSessions = defineStore('sessions', () => {
 		isLoadingOlder,
 		loadOlder,
 		lastError,
+		refused,
 		runOf,
 		isRunning,
 		faceOf,
@@ -1122,6 +1195,9 @@ export const useSessions = defineStore('sessions', () => {
 		archive,
 		remove,
 		fork,
+		scheduleReplyChat,
+		scheduleReplyText,
+		dismissRefusal,
 		refreshSession,
 		place,
 	}

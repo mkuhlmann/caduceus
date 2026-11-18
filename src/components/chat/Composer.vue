@@ -296,7 +296,14 @@ function seed(prefix: string) {
 	})
 }
 
-defineExpose({ focus: () => area.value?.focus(), autoFocus, seed })
+/** Put back a message that could not be sent, unless something new was typed meanwhile. */
+function restore(t: string, imgs: string[] = []) {
+	if (text.value.trim() || images.value.length) return
+	text.value = t
+	images.value = [...imgs]
+}
+
+defineExpose({ focus: () => area.value?.focus(), autoFocus, seed, restore })
 </script>
 
 <template>

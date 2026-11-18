@@ -20,6 +20,10 @@ _Avoid_: DM, main chat
 A group chat where several bots and the user talk together, hosted by the Hermes gateway.
 _Avoid_: Group (alone), channel
 
+**Reply chat**:
+The chat that replies to a schedule's runs go to, one per job, titled `Reply to <job>`. A schedule's own chat only runs its job, so Hermes refuses anything typed into it; the first reply about a run carries what the run produced.
+_Avoid_: Follow-up chat, copy
+
 **Transcript**:
 The messages Hermes has saved for a chat, oldest first.
 
