@@ -1,5 +1,6 @@
 import { DASH, get, post, put, patch, del, qs, request } from './http'
 import type { Job } from './gateway'
+import type { ProviderModels } from './chat-models'
 
 /** Hermes dashboard REST API (config, skills, kanban, webhooks, search, projects). */
 
@@ -119,18 +120,38 @@ export type Profile = {
 	gateway_running?: boolean
 }
 
+export type ModelInfo = {
+	model: string
+	provider: string
+	effective_context_length?: number
+	capabilities?: { supports_tools?: boolean; supports_vision?: boolean; supports_reasoning?: boolean }
+}
+
+export type SetModelResult = { ok: boolean; confirm_required?: boolean; confirm_message?: string }
+
 const K = `${DASH}/api/plugins/kanban`
 
 export const dashboard = {
 	status: () => get(`${DASH}/api/status`),
-	modelInfo: () => get(`${DASH}/api/model/info`),
+	modelInfo: () => get<ModelInfo>(`${DASH}/api/model/info`),
 	modelOptions: () =>
 		get<{
-			providers: { slug: string; name: string; is_current?: boolean; models: string[] }[]
+			providers: (ProviderModels & { is_current?: boolean })[]
 			model: string
 			provider: string
 		}>(`${DASH}/api/model/options`),
-	setModel: (provider: string, model: string) => post(`${DASH}/api/model/set`, { scope: 'main', provider, model }),
+	/**
+	 * Set the default model: Hermes' own, or a bot's with `profile`. Hermes may first ask to confirm an expensive
+	 * model (`confirm_required`); send it again with `confirm` once the user agrees.
+	 */
+	setModel: (provider: string, model: string, opts: { profile?: string; confirm?: boolean } = {}) =>
+		post<SetModelResult>(`${DASH}/api/model/set`, {
+			scope: 'main',
+			provider,
+			model,
+			...(opts.profile ? { profile: opts.profile } : {}),
+			...(opts.confirm ? { confirm_expensive_model: true } : {}),
+		}),
 
 	// Sessions (richer than the gateway: full-text search, sources)
 	sessions: (
@@ -162,8 +183,6 @@ export const dashboard = {
 		put(`${DASH}/api/profiles/${encodeURIComponent(name)}/soul`, { content }),
 	setProfileDescription: (name: string, description: string) =>
 		put(`${DASH}/api/profiles/${encodeURIComponent(name)}/description`, { description }),
-	setProfileModel: (name: string, provider: string, model: string) =>
-		put(`${DASH}/api/profiles/${encodeURIComponent(name)}/model`, { provider, model }),
 
 	// Cron jobs through the dashboard, which takes the fields the gateway's /api/jobs leaves out, such as a
 	// script-only job's `script` and `no_agent`. Without a profile Hermes uses its default one.

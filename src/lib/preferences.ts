@@ -21,6 +21,8 @@ export const PreferencesSchema = Type.Object(
 		 * asks waits for your answer even when no device shows the chat. Off, Hermes skips a question nobody can see.
 		 */
 		waitForAnswers: Type.Boolean({ default: false }),
+		/** Models starred to show in a chat's model menu, as `provider::model`, in the order starred. */
+		favoriteModels: Type.Array(Type.String({ maxLength: 300 }), { default: [], maxItems: 200 }),
 	},
 	{ additionalProperties: false, default: {} },
 )
@@ -34,4 +36,5 @@ export const defaultPreferences: Preferences = {
 	tintMessages: true,
 	runStats: false,
 	waitForAnswers: false,
+	favoriteModels: [],
 }

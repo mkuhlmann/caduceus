@@ -33,10 +33,17 @@ test('an empty folder starts with every default', () => {
 		tintMessages: true,
 		runStats: false,
 		waitForAnswers: false,
+		favoriteModels: [],
 	})
 	expect(config.notifications.events.reply).toBe(true)
 	expect(config.connection.gatewayUrl).toBe('')
-	expect(state).toMatchObject({ readMarks: { bots: {}, rooms: {} }, projects: [], bots: {}, push: { devices: [] } })
+	expect(state).toMatchObject({
+		readMarks: { bots: {}, rooms: {} },
+		chatModels: {},
+		projects: [],
+		bots: {},
+		push: { devices: [] },
+	})
 })
 
 test('fields missing from a file get their defaults; fields no version knows are dropped', () => {
@@ -47,6 +54,7 @@ test('fields missing from a file get their defaults; fields no version knows are
 		tintMessages: true,
 		runStats: true,
 		waitForAnswers: false,
+		favoriteModels: [],
 	})
 })
 

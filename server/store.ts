@@ -6,13 +6,14 @@ import { Value } from '@sinclair/typebox/value'
 import { PreferencesSchema } from '../src/lib/preferences'
 import { NotifySettingsSchema } from '../src/lib/notifications'
 import { ReadMarksSchema } from '../src/lib/read-marks'
+import { ChatModelsSchema } from '../src/lib/chat-models'
 
 /**
  * What the relay remembers, in two files in its data folder (`CADUCEUS_DATA_DIR`, `./.data` by default), both
  * readable by their owner only:
  *
  * - `config.json`: what you set in the app. The connection, preferences, notification settings.
- * - `state.json`: what the app keeps for itself. Read marks, projects, bot keys, push devices and keys.
+ * - `state.json`: what the app keeps for itself. Read marks, chat models, projects, bot keys, push devices and keys.
  *
  * Both are checked against their schema when the relay starts; one that does not fit stops it with what is wrong.
  * Modules change `config` or `state` in place and then call `saveConfig()` or `saveState()`.
@@ -87,6 +88,8 @@ const ConfigSchema = Type.Object({
 const StateSchema = Type.Object({
 	version: Type.Literal(1, { default: 1 }),
 	readMarks: ReadMarksSchema,
+	/** The model chosen for each chat, which Hermes does not tell clients (`src/lib/chat-models.ts`). */
+	chatModels: ChatModelsSchema,
 	projects: Type.Array(ProjectSchema, { default: [] }),
 	bots: Type.Record(Type.String(), BotSchema, { default: {} }),
 	push: PushSchema,

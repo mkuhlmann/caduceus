@@ -58,10 +58,18 @@ export const usePreferences = defineStore('preferences', () => {
 		}
 	}
 
+	const isFavorite = (key: string) => prefs.value.favoriteModels.includes(key)
+
+	/** Stars a model (`provider::model`) for the chat's model menu, or takes its star away. */
+	function toggleFavorite(key: string) {
+		const list = prefs.value.favoriteModels
+		return set('favoriteModels', isFavorite(key) ? list.filter((k) => k !== key) : [...list, key])
+	}
+
 	// Changed on another device: the relay says so, and coming back to the app reads them again.
 	const reread = () => load().catch(() => {})
 	onRpcEvent('caduceus.preferences', reread)
 	onResync(reread)
 
-	return { prefs, load, set }
+	return { prefs, load, set, isFavorite, toggleFavorite }
 })

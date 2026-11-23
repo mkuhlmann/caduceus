@@ -1,18 +1,18 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
 import Skeleton from '@/components/Skeleton.vue'
-import { DASH, post } from '@/lib/http'
+import ModelList from '@/components/chat/ModelList.vue'
 import { dashboard } from '@/lib/dashboard'
 import { useResource } from '@/lib/resource'
 import { useToasts } from '@/stores/toast'
-import { useDialogs } from '@/stores/dialogs'
+import { useChatModels } from '@/stores/chat-models'
 
 const toasts = useToasts()
-const dialogs = useDialogs()
+const chatModels = useChatModels()
 const busy = ref(false)
 const res = useResource('settings:model', async () => {
 	const [options, info] = await Promise.all([dashboard.modelOptions(), dashboard.modelInfo()])
-	return { options, info: info as any }
+	return { options, info }
 })
 const loading = computed(() => res.pending.value)
 const error = computed(() => (res.data.value ? '' : res.error.value))
@@ -52,28 +52,10 @@ watch(provider, (p, old) => {
 	else if (p === current.value.provider) model.value = current.value.model
 })
 
-type SetResult = { ok: boolean; confirm_required?: boolean; confirm_message?: string }
-const send = (confirm?: boolean) =>
-	post<SetResult>(`${DASH}/api/model/set`, {
-		scope: 'main',
-		provider: provider.value,
-		model: model.value,
-		...(confirm ? { confirm_expensive_model: true } : {}),
-	})
-
 async function apply() {
 	busy.value = true
 	try {
-		let r = await send()
-		if (!r.ok && r.confirm_required) {
-			const ok = await dialogs.confirm({
-				title: 'Use this model?',
-				body: r.confirm_message || 'This model may be expensive.',
-				action: 'Use model',
-			})
-			if (!ok) return
-			r = await send(true)
-		}
+		if (!(await chatModels.setDefault(provider.value, model.value))) return
 		toasts.push('Model changed')
 		await load()
 	} catch (e) {
@@ -122,5 +104,10 @@ const ctx = (n?: number) => (n ? `${n.toLocaleString()} tokens` : 'unknown')
 			</p>
 			<button class="btn-primary" type="submit" :disabled="busy || unchanged || !model">Use this model</button>
 		</form>
+		<section aria-labelledby="fav-title" class="border-t border-line pt-6">
+			<h3 id="fav-title" class="font-semibold">Favorite models</h3>
+			<p class="mb-3 text-sm text-ink-2">Starred models show in the model menu under every chat's message box.</p>
+			<ModelList :providers="options?.providers ?? []" :current="current" />
+		</section>
 	</div>
 </template>

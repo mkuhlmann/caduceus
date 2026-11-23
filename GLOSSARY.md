@@ -27,6 +27,19 @@ _Avoid_: Follow-up chat, copy
 **Transcript**:
 The messages Hermes has saved for a chat, oldest first.
 
+## Models
+
+**Default model**:
+The model Hermes, or a bot, starts new chats on. A chat keeps the model it started with, so changing the default leaves chats that have already run as they are.
+
+**Chat model**:
+The model a chat runs on, and its reasoning level. Switching it locks the chat to the model from its next turn on. In a Bot Chat it changes the bot's default model as well; the reasoning level stays with the chat.
+_Avoid_: Session model, model lock (in UI copy)
+
+**Favorite model**:
+A model starred to show in the chat model menu. Favorites follow the user to every device.
+_Avoid_: Pinned model
+
 ## Runs
 
 **Turn**:

@@ -173,7 +173,7 @@ const at = (sessionId?: string) => gwFor(sessionId ? owners.get(sessionId) : und
 
 export const gateway = {
 	health: () => get<{ status: string; version?: string }>(`${GW}/health`),
-	capabilities: () => get(`${GW}/v1/capabilities`),
+	capabilities: () => get<{ features?: Record<string, unknown> }>(`${GW}/v1/capabilities`),
 	models: () => get<{ data: { id: string }[] }>(`${GW}/v1/models`),
 
 	sessions: (p: { limit?: number; offset?: number; source?: string; title?: string; include_hidden?: boolean } = {}) =>
@@ -184,6 +184,12 @@ export const gateway = {
 	updateSession: (id: string, body: Partial<Pick<Session, 'title' | 'pinned' | 'archived' | 'hidden'>>) =>
 		patch(`${at(id)}/api/sessions/${enc(id)}`, body),
 	deleteSession: (id: string) => del(`${at(id)}/api/sessions/${enc(id)}`),
+	/**
+	 * Lock a chat to a model: every later turn runs on it (Hermes' Browser model lock). `model_options` carries the
+	 * reasoning level; sending none puts the model's default back.
+	 */
+	setSessionModel: (id: string, provider: string, model: string, modelOptions: Record<string, unknown> = {}) =>
+		post(`${at(id)}/api/sessions/${enc(id)}/model`, { provider, model, model_options: modelOptions }),
 	forkSession: (id: string, title?: string) =>
 		post<{ session: Session }>(`${at(id)}/api/sessions/${enc(id)}/fork`, title ? { title } : {}).then((r) => r.session),
 	/** The whole transcript as older backends serve it: the first 500 messages, oldest first. */

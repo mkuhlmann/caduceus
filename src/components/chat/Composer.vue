@@ -390,7 +390,7 @@ defineExpose({ focus: () => area.value?.focus(), autoFocus, seed, restore })
 				<span ref="meter" class="voice-meter" aria-hidden="true"><i v-for="n in 5" :key="n" /></span>
 			</div>
 			<span v-else-if="transcribing" class="px-1 text-xs text-ink-3">Turning your recording into text</span>
-			<div v-else class="flex items-center gap-1">
+			<div v-else class="flex min-w-0 items-center gap-1">
 				<button
 					v-if="!noImages"
 					type="button"
@@ -412,7 +412,11 @@ defineExpose({ focus: () => area.value?.focus(), autoFocus, seed, restore })
 						;($event.target as HTMLInputElement).value = ''
 					"
 				/>
-				<span v-if="running" class="px-1 text-xs text-ink-3">Messages you send now redirect the running agent</span>
+				<!-- Controls the page adds beside "Attach image", like the chat's model. -->
+				<slot name="tools" />
+				<span v-if="running" class="min-w-0 truncate px-1 text-xs text-ink-3"
+					>Messages you send now redirect the running agent</span
+				>
 			</div>
 			<div class="flex items-center gap-1.5">
 				<template v-if="app.dashboard?.ok">

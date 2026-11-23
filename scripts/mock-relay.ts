@@ -39,6 +39,9 @@
  *     c.png -geometry +1600+0 -composite -define webp:lossless=true -define webp:method=6 out.webp
  */
 import { advance, noMarks, parseMarks } from '../src/lib/read-marks'
+import { defaultPreferences } from '../src/lib/preferences'
+import { ChatModelSchema } from '../src/lib/chat-models'
+import { Value } from '@sinclair/typebox/value'
 
 const DIST = (process.env.CADUCEUS_DIST ?? new URL('../dist', import.meta.url).pathname).replace(/\/?$/, '/')
 const PORT = Number(process.env.MOCK_PORT ?? 7899)
@@ -380,6 +383,11 @@ const jobs = [
 ]
 
 let readMarks = noMarks()
+let preferences: Record<string, unknown> = {
+	...defaultPreferences,
+	favoriteModels: ['nous::hermes-4-405b', 'openrouter::anthropic/claude-opus-5.5'],
+}
+const chatModels: Record<string, unknown> = {}
 
 const json = (data: unknown, status = 200) =>
 	new Response(JSON.stringify(data), { status, headers: { 'content-type': 'application/json' } })
@@ -460,6 +468,19 @@ Bun.serve({
 		if (p === 'runs') return json({ 'bot-scout': 'run-scout', ...activeRuns })
 		if (p === 'bots') return json(bots)
 		if (p === 'projects') return json([])
+		if (p === 'preferences') {
+			if (req.method === 'PATCH') preferences = { ...preferences, ...((await req.json()) as object) }
+			return json(preferences)
+		}
+		if (p === 'chat-models') return json(chatModels)
+		const cm = /^chat-models\/([^/]+)$/.exec(p)
+		if (cm && req.method === 'PUT') {
+			// Checked like the relay does, so a choice it would refuse shows here too.
+			const body = await req.json()
+			if (!Value.Check(ChatModelSchema, body))
+				return json({ error: { message: 'Not a chat model.', code: 'invalid_params' } }, 400)
+			return json((chatModels[decodeURIComponent(cm[1]!)] = body))
+		}
 		if (p === 'read-marks') {
 			if (req.method === 'PATCH') {
 				const patch = parseMarks(await req.json())
@@ -488,8 +509,23 @@ Bun.serve({
 			const rest = m[2]!
 			if (rest === 'health') return json({ status: 'ok' })
 			if (rest === 'v1/models') return json({ data: [{ id: 'hermes-4-405b' }] })
+			if (rest === 'v1/capabilities') return json({ features: { session_model_lock: true } })
 			if (rest === 'api/sessions') return sessionsFor(profile, url)
-			let s = /^api\/sessions\/([^/]+)\/messages$/.exec(rest)
+			let s = /^api\/sessions\/([^/]+)\/model$/.exec(rest)
+			if (s && req.method === 'POST') {
+				// A chat locked to a model: Hermes stores the model name on it, nothing else a client can read.
+				const body: any = await req.json()
+				const id = decodeURIComponent(s[1]!)
+				const found = [...chats, ...Object.values(botChats)].find((x) => x.id === id)
+				if (found) found.model = body.model
+				console.log('model lock', id, body)
+				return json({
+					object: 'hermes.session.model_lock',
+					session_id: id,
+					runtime: { ...body, model_lock: 'accepted' },
+				})
+			}
+			s = /^api\/sessions\/([^/]+)\/messages$/.exec(rest)
 			if (s) return messagesFor(decodeURIComponent(s[1]!), url)
 			s = /^api\/sessions\/([^/]+)$/.exec(rest)
 			if (s) {
@@ -525,11 +561,34 @@ Bun.serve({
 			if (rest === 'api/model/options')
 				return json({
 					providers: [
-						{ slug: 'nous', name: 'Nous Portal', is_current: true, models: ['hermes-4-405b', 'hermes-4-70b'] },
+						{
+							slug: 'nous',
+							name: 'Nous Portal',
+							is_current: true,
+							models: ['hermes-4-405b', 'hermes-4-70b', 'anthropic/claude-opus-5.5'],
+							capabilities: {
+								'hermes-4-405b': { reasoning: true },
+								'hermes-4-70b': { reasoning: false },
+								'anthropic/claude-opus-5.5': { reasoning: true, can_disable_reasoning: false },
+							},
+						},
+						{
+							slug: 'openrouter',
+							name: 'OpenRouter',
+							models: ['anthropic/claude-opus-5.5', 'anthropic/claude-sonnet-5.5', 'qwen/qwen3.8-flash'],
+							capabilities: { 'qwen/qwen3.8-flash': { reasoning: false } },
+						},
 					],
 					model: 'hermes-4-405b',
 					provider: 'nous',
 				})
+			if (rest === 'api/model/set' && req.method === 'POST') {
+				const body: any = await req.json()
+				console.log('model set', body)
+				const bot = profiles.find((x: any) => x.name === (body.profile ?? 'default'))
+				if (bot) Object.assign(bot, { provider: body.provider, model: body.model })
+				return json({ ok: true, ...body })
+			}
 			if (rest === 'api/status') return json({ version: '0.9.0' })
 			if (rest.startsWith('api/profiles/projects/tree')) return json({ projects: [] })
 		}

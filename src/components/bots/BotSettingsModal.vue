@@ -10,12 +10,18 @@ import { resolveLook, type BotLook } from '@/lib/avatar'
 import { prettyName, useBots, type Bot } from '@/stores/bots'
 import { useToasts } from '@/stores/toast'
 import { useDialogs } from '@/stores/dialogs'
+import { useChatModels } from '@/stores/chat-models'
+import { keepReasoning, parseModelKey } from '@/lib/chat-models'
+import { useResource } from '@/lib/resource'
 
 const props = defineProps<{ bot: Bot }>()
 const emit = defineEmits<{ close: [] }>()
 const bots = useBots()
 const toasts = useToasts()
 const dialogs = useDialogs()
+const chatModels = useChatModels()
+void chatModels.ensure()
+const modelOptions = useResource('bots:model-options', () => dashboard.modelOptions())
 const router = useRouter()
 
 const look = ref<BotLook>(resolveLook(props.bot.name, props.bot.look))
@@ -63,10 +69,17 @@ async function save() {
 			...(soulLoaded.value && soul.value !== soulAtStart ? { soul: soul.value } : {}),
 		})
 		await caps.value?.save()
-		if (model.value && model.value !== currentModel) {
-			const [provider, m] = model.value.split('::')
-			await dashboard.setProfileModel(props.bot.name, provider!, m!)
-			await bots.load()
+		const picked = model.value !== currentModel ? parseModelKey(model.value) : undefined
+		// Its Bot Chat moves to the new model too, keeping its reasoning level when the model can take it.
+		if (picked) {
+			const chat = bots.chatId(props.bot.name)
+			const reasoning = keepReasoning(
+				modelOptions.data.value?.providers ?? [],
+				picked,
+				chat ? chatModels.choices[chat]?.reasoning : undefined,
+			)
+			const choice = { ...picked, ...(reasoning ? { reasoning } : {}) }
+			if (!(await chatModels.setBotModel(props.bot, chat, choice))) return
 		}
 		toasts.push('Bot saved')
 		emit('close')

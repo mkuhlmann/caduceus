@@ -10,6 +10,9 @@ import { usePreferences } from '@/stores/preferences'
 import { useToasts } from '@/stores/toast'
 import { useDialogs } from '@/stores/dialogs'
 import { dashboard } from '@/lib/dashboard'
+import { useResource } from '@/lib/resource'
+import { currentModel, shortName, type ChatModel } from '@/lib/chat-models'
+import { useChatModels } from '@/stores/chat-models'
 import { setSessionProfile } from '@/lib/gateway'
 import { dateTime } from '@/lib/time'
 import { useTitle } from '@/lib/title'
@@ -19,6 +22,7 @@ import BotBento from '@/components/chat/BotBento.vue'
 import AgentTurnView from '@/components/chat/AgentTurnView.vue'
 import type { ClarifyStep } from '@/lib/turns'
 import Composer from '@/components/chat/Composer.vue'
+import ModelSwitcher from '@/components/chat/ModelSwitcher.vue'
 import BotSidebar from '@/components/bots/BotSidebar.vue'
 import BotAvatar from '@/components/bots/BotAvatar.vue'
 import BotSettingsModal from '@/components/bots/BotSettingsModal.vue'
@@ -39,6 +43,7 @@ const preferences = usePreferences()
 const toasts = useToasts()
 const dialogs = useDialogs()
 const bots = useBots()
+const chatModels = useChatModels()
 
 // On /bots/:name this is a bot's chat: its one `Bot Chat`, with the bot roster beside it.
 const botName = computed(() => (route.params.name as string | undefined) || undefined)
@@ -121,17 +126,19 @@ const scroller = ref<HTMLElement>()
 const content = ref<HTMLElement>()
 const composer = ref<InstanceType<typeof Composer>>()
 const drawer = ref(false)
-const model = ref('')
+/** Hermes' default model, which a chat that has not run yet starts on. */
+const defaultModel = ref<{ provider: string; model: string }>()
 const creating = ref(false)
 let stickToBottom = true
 
 onMounted(async () => {
 	sessions.ensureList()
 	if (!projects.loaded) projects.load().catch(() => {})
+	void chatModels.ensure()
 	if (app.dashboard?.ok)
 		dashboard
 			.modelInfo()
-			.then((m) => (model.value = m.model))
+			.then((m) => (defaultModel.value = { provider: m.provider, model: m.model }))
 			.catch(() => {})
 })
 
@@ -265,11 +272,13 @@ async function send(text: string, images: string[]) {
 		return
 	}
 	if (id.value && scheduleChat.value && !running.value) return replyToSchedule(id.value, text, images)
+	const pending = pendingModel.value
 	let target = id.value
 	if (!target && botName.value) {
 		creating.value = true
 		try {
 			target = await startBotChat(botName.value)
+			if (!(await applyPendingModel(target, pending, text, images))) return
 		} catch (e) {
 			toasts.error(`Could not start a chat with this bot: ${(e as Error).message}`)
 			return
@@ -286,6 +295,7 @@ async function send(text: string, images: string[]) {
 			})
 			target = s.id
 			await router.push(`/chat/${encodeURIComponent(s.id)}`)
+			if (!(await applyPendingModel(target, pending, text, images))) return
 		} catch (e) {
 			toasts.error(`Could not start a chat: ${(e as Error).message}`)
 			return
@@ -396,7 +406,78 @@ const messageTint = computed(() =>
 )
 // The dots after "Working" in a bot's chat take its colour, unless its body is too pale to show on the page.
 const liveTint = computed(() => (botColor.value && eyesAreDark(botColor.value) ? 'var(--ink-3)' : botColor.value))
-const shownModel = computed(() => (bot.value ? bot.value.model : model.value))
+
+// The chat's model, switched from the composer. A new chat holds the choice until its first message creates it.
+const modelOptions = useResource('bots:model-options', () => dashboard.modelOptions())
+const pendingModel = ref<ChatModel>()
+watch([id, botName], () => (pendingModel.value = undefined))
+const chatModel = computed(() => {
+	if (pendingModel.value) return pendingModel.value
+	const b = bot.value
+	return currentModel({
+		chosen: id.value ? chatModels.choices[id.value] : undefined,
+		stored: session.value?.model,
+		fallback: b ? (b.model ? { provider: b.provider, model: b.model } : undefined) : defaultModel.value,
+		providers: modelOptions.data.value?.providers ?? [],
+	})
+})
+const showSwitcher = computed(
+	() =>
+		!!app.gateway?.ok &&
+		!!app.dashboard?.ok &&
+		chatModels.supported === true &&
+		!scheduleChat.value &&
+		(!bot.value || bot.value.connected),
+)
+// Without the switcher, the header still says which model runs.
+const shownModel = computed(() => (showSwitcher.value ? '' : (bot.value?.model ?? defaultModel.value?.model ?? '')))
+const switchingModel = ref(false)
+
+/**
+ * A model picked in the composer. In a bot's own chat it becomes the bot's model; any other chat is locked to it.
+ * A new chat keeps it until it is created.
+ */
+async function pickModel(choice: ChatModel) {
+	const before = chatModel.value
+	const sameModel = before?.provider === choice.provider && before?.model === choice.model
+	const b = bot.value
+	if (!id.value && !b) {
+		pendingModel.value = choice
+		return
+	}
+	const said = (done: string) => (running.value ? `${done}. It applies from the next turn.` : done)
+	switchingModel.value = true
+	try {
+		if (b && !botSession.value) {
+			if (!(await chatModels.setBotModel(b, id.value, choice))) return
+			// A bot without a chat yet: the reasoning level waits for the chat.
+			if (!id.value) pendingModel.value = choice.reasoning ? choice : undefined
+			toasts.push(said(sameModel ? 'Reasoning changed' : `${b.displayName} now uses ${shortName(choice.model)}`))
+		} else {
+			await chatModels.apply(id.value!, choice)
+			toasts.push(said(sameModel ? 'Reasoning changed' : 'Model changed'))
+		}
+	} catch (e) {
+		toasts.error(`Could not change the model. ${(e as Error).message}`)
+	} finally {
+		switchingModel.value = false
+	}
+}
+
+/** A new chat takes the model picked for it; false when Hermes refused, with the message back in the box. */
+async function applyPendingModel(target: string, pending: ChatModel | undefined, text: string, images: string[]) {
+	if (!pending) return true
+	try {
+		await chatModels.apply(target, pending)
+		return true
+	} catch (e) {
+		toasts.error(
+			`Could not switch the chat to ${shortName(pending.model)}: ${(e as Error).message}. Your message is back in the box; pick a model and try again.`,
+		)
+		composer.value?.restore(text, images)
+		return false
+	}
+}
 const connectingBot = ref(false)
 function answerClarify(step: ClarifyStep, answer: string) {
 	return id.value ? sessions.answerClarify(id.value, step, answer) : Promise.resolve()
@@ -509,8 +590,8 @@ async function connectThisBot() {
 						<span v-if="session?.started_at">{{ dateTime(session.started_at) }}</span>
 					</p>
 				</div>
-				<span v-if="model && !botName" class="chip hidden sm:inline-flex" :title="'Model used for new turns'">{{
-					model
+				<span v-if="shownModel && !botName" class="chip hidden sm:inline-flex" title="Model used for new turns">{{
+					shownModel
 				}}</span>
 			</header>
 
@@ -753,7 +834,11 @@ async function connectThisBot() {
 					:active-bot="activeProfile"
 					@send="send"
 					@stop="id && sessions.stop(id)"
-				/>
+				>
+					<template v-if="showSwitcher" #tools>
+						<ModelSwitcher :current="chatModel" :busy="switchingModel || creating" @pick="pickModel" />
+					</template>
+				</Composer>
 			</div>
 		</section>
 		<div v-if="bot && routinesOpen" class="fixed inset-0 z-40 md:static md:z-auto md:h-full">

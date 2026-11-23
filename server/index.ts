@@ -7,6 +7,7 @@ import { authGuard, authRoutes } from './auth'
 import { projectRoutes } from './projects'
 import { preferenceRoutes } from './preferences'
 import { readMarkRoutes } from './read-marks'
+import { chatDeleted, chatModelRoutes } from './chat-models'
 import { botRoutes, botsMayHaveChanged } from './bots'
 import { botWatchRoutes } from './bot-watch'
 import { rpcRoutes, viewerSupport } from './hermes-socket'
@@ -48,6 +49,7 @@ const app = new Elysia()
 	.use(projectRoutes)
 	.use(preferenceRoutes)
 	.use(readMarkRoutes)
+	.use(chatModelRoutes)
 	.use(botRoutes)
 	.use(botWatchRoutes)
 	.use(rpcRoutes)
@@ -87,13 +89,17 @@ const app = new Elysia()
 
 // Method-specific routes: Elysia ranks `.get('/*')` (static files) above `.all(...)`.
 for (const method of ['GET', 'POST', 'PUT', 'PATCH', 'DELETE']) {
-	app.route(method, '/ui-api/gw/*', async ({ request, params }) =>
-		trackChatStream('/' + params['*'], await relay('gw', '/' + params['*'], request)),
-	)
+	app.route(method, '/ui-api/gw/*', async ({ request, params }) => {
+		const res = await relay('gw', '/' + params['*'], request)
+		// A deleted chat's model choice goes with it, from whichever device deleted it.
+		if (method === 'DELETE' && res.ok) chatDeleted(params['*'])
+		return trackChatStream('/' + params['*'], res)
+	})
 	app.route(method, '/ui-api/dash/*', async ({ request, params }) => {
 		const res = await relay('dash', '/' + params['*'], request)
 		// A bot's model, description or soul changed straight on the dashboard: other devices hear of it.
-		if (method !== 'GET' && params['*'].startsWith('api/profiles')) botsMayHaveChanged()
+		if (method !== 'GET' && (params['*'].startsWith('api/profiles') || params['*'] === 'api/model/set'))
+			botsMayHaveChanged()
 		return res
 	})
 }
