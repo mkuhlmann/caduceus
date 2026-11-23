@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.6.0](https://github.com/mkuhlmann/caduceus/compare/v0.5.0...v0.6.0) (2026-11-23)
+
+
+### Features
+
+* keep the code a failed run carries ([da373cd](https://github.com/mkuhlmann/caduceus/commit/da373cd2fb2cde8a6b9c6afb5733b5c84f90ad6d))
+* send replies to a schedule's run to its reply chat ([0e43a23](https://github.com/mkuhlmann/caduceus/commit/0e43a2305375325d0e5d04058867d2a968445474))
+* switch a chat's model and reasoning from the message box ([f3ebec9](https://github.com/mkuhlmann/caduceus/commit/f3ebec9e0181847017c82953b10989f751bf830b))
+* tell a schedule's chat and build a reply's context ([d767cc4](https://github.com/mkuhlmann/caduceus/commit/d767cc406229a66ebc34bd43b35cdd8dd1c56fec))
+
 ## [0.5.0](https://github.com/mkuhlmann/caduceus/compare/v0.4.0...v0.5.0) (2026-11-15)
 
 
